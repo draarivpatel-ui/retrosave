@@ -1,0 +1,155 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="description" content="RetroSave - a zero-dependency CRT dungeon and boss-rush arcade game with deterministic replay, a sprite editor, and a procedural retro synth visualizer. Built for Hack Club Retrospect and Game Lab.">
+<meta name="theme-color" content="#05060a">
+<title>RetroSave - CRT Dungeon Rush</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body data-mode="title">
+
+<div class="cabinet">
+  <header class="cab-top">
+    <div class="brand">
+      <span class="logo-dot"></span>
+      <span class="brand-name">RETRO<span>SAVE</span></span>
+      <span class="brand-tag">v1.0 / CRT EDITION</span>
+    </div>
+    <div class="cab-actions">
+      <button id="audioBtn" class="btn btn-ghost" type="button" title="Toggle the procedural synth (starts muted)">Enable Audio</button>
+      <button class="btn btn-ghost" data-act="viz" type="button" title="Procedural visualizer (V)">Visualizer</button>
+    </div>
+  </header>
+
+  <div class="screen-wrap">
+    <div class="screen-bezel">
+      <canvas id="screen" width="960" height="600" aria-label="RetroSave game screen"></canvas>
+      <div class="screen-glass" aria-hidden="true"></div>
+    </div>
+  </div>
+
+  <div id="hud" class="hud-line" aria-live="off"></div>
+
+  <section class="console">
+    <!-- ---------------- TITLE / MAIN MENU ---------------- -->
+    <div id="panelTitle" class="panel">
+      <div class="panel-col">
+        <h1 class="headline">A dungeon you can <em>replay</em> frame by frame.</h1>
+        <p class="lede">Twelve procedurally generated CRT floors. Boss rush every third floor. Deterministic seeds, a frame-accurate speedrun clock, and replays you can copy, paste, and verify. Zero dependencies, one canvas, all keyboard and gamepad.</p>
+        <div class="seed-row">
+          <label for="seedInput">SEED</label>
+          <input id="seedInput" type="text" maxlength="32" value="RETROSAVE-1986" spellcheck="false" autocomplete="off">
+          <button class="btn btn-primary" data-act="start" type="button">START RUN &rsaquo;</button>
+        </div>
+        <p class="hint">Same seed plus same inputs equals the exact same run. Try a friend's seed and race their ghost.</p>
+      </div>
+      <div class="panel-col side">
+        <div class="menu-grid">
+          <button class="btn" data-act="scores" type="button">High Scores</button>
+          <button class="btn" data-act="replay" type="button">Replay Lab</button>
+          <button class="btn" data-act="editor" type="button">Sprite Editor</button>
+          <button class="btn" data-act="viz" type="button">Visualizer</button>
+        </div>
+        <div class="controls-card">
+          <div class="controls-title">CONTROLS</div>
+          <div class="ctrl"><span>MOVE</span><kbd>WASD</kbd> / <kbd>ARROWS</kbd> / <kbd>STICK</kbd></div>
+          <div class="ctrl"><span>FIRE</span><kbd>SPACE</kbd> / <kbd>J</kbd> / <kbd>A</kbd></div>
+          <div class="ctrl"><span>DASH</span><kbd>SHIFT</kbd> / <kbd>K</kbd> / <kbd>B</kbd></div>
+          <div class="ctrl"><span>PAUSE</span><kbd>ESC</kbd> / <kbd>START</kbd></div>
+          <div class="ctrl"><span>EDITOR</span><kbd>E</kbd> &nbsp; <span>VIZ</span><kbd>V</kbd> &nbsp; <span>AUDIO</span><kbd>M</kbd></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ---------------- PAUSE ---------------- -->
+    <div id="panelPause" class="panel panel-compact hidden">
+      <div class="panel-col">
+        <h2 class="headline small">Paused</h2>
+        <p class="lede">The dungeon holds its breath. No time is ticking while you are here.</p>
+        <div class="btn-row">
+          <button class="btn btn-primary" data-act="resume" type="button">Resume</button>
+          <button class="btn" data-act="save-run" type="button">Export Replay</button>
+          <button class="btn" data-act="quit" type="button">Quit to Title</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- ---------------- SCORES ---------------- -->
+    <div id="panelScores" class="panel hidden">
+      <div class="panel-col full">
+        <h2 class="headline small">Local High Scores</h2>
+        <p class="lede">Runs are stored in this browser as checksummed records. Nothing leaves your machine.</p>
+        <div id="scoreList" class="score-list"></div>
+        <div class="btn-row">
+          <button class="btn" data-act="title" type="button">Back to Title</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- ---------------- REPLAY LAB ---------------- -->
+    <div id="panelReplay" class="panel hidden">
+      <div class="panel-col full">
+        <h2 class="headline small">Replay Lab</h2>
+        <p class="lede">A replay is a seed plus a compressed list of input changes. Paste one below to watch it play back from frame zero, or copy your most recent run and share it.</p>
+        <textarea id="replayInput" rows="4" spellcheck="false" placeholder="RSAVE1.xxxxx...."></textarea>
+        <div class="btn-row">
+          <button class="btn btn-primary" data-act="import-replay" type="button">Load Replay</button>
+          <button class="btn" data-act="export-replay" type="button">Export Last Run</button>
+          <button class="btn" data-act="copy-replay" type="button">Copy to Clipboard</button>
+          <button class="btn" data-act="title" type="button">Back</button>
+        </div>
+        <p class="hint">Records are checksummed with FNV-1a. A single corrupted character invalidates the replay.</p>
+      </div>
+    </div>
+
+    <!-- ---------------- SPRITE EDITOR ---------------- -->
+    <div id="panelEditor" class="panel hidden">
+      <div class="panel-col">
+        <h2 class="headline small">Sprite Editor</h2>
+        <p class="lede">Paint an 8x8 bitmask. Each row is one byte, written as two hex digits. Export a JSON sprite sheet for your own projects.</p>
+        <div class="editor-layout">
+          <div>
+            <div id="editorGrid" class="editor-grid" aria-label="8x8 sprite editor grid"></div>
+            <div class="editor-preview-wrap">
+              <canvas id="editorPreview" width="128" height="128"></canvas>
+              <span class="mini-label">PREVIEW</span>
+            </div>
+          </div>
+          <div class="editor-side">
+            <label class="field-label" for="editorColor">INK</label>
+            <input id="editorColor" type="color" value="#7df9ff">
+            <label class="field-label" for="editorName">NAME</label>
+            <input id="editorName" type="text" maxlength="24" value="CUSTOM" spellcheck="false">
+            <label class="field-label" for="editorHex">BITMASK (8 hex rows)</label>
+            <textarea id="editorHex" rows="2" spellcheck="false"></textarea>
+            <div class="btn-row wrap">
+              <button class="btn btn-compact" data-act="load-hex" type="button">Load Mask</button>
+              <button class="btn btn-compact" data-act="clear-editor" type="button">Clear</button>
+              <button class="btn btn-compact" data-act="fill-editor" type="button">Fill</button>
+              <button class="btn btn-compact" data-act="load-default" type="button">Default</button>
+              <button class="btn btn-compact" data-act="flip-x" type="button">Flip X</button>
+              <button class="btn btn-compact" data-act="flip-y" type="button">Flip Y</button>
+              <button class="btn btn-compact" data-act="rotate" type="button">Rotate</button>
+            </div>
+          </div>
+        </div>
+        <div class="btn-row">
+          <button class="btn btn-primary" data-act="export-sprite" type="button">Export Sprite JSON</button>
+          <button class="btn" data-act="apply-sprite" type="button">Apply to Player</button>
+          <button class="btn" data-act="editor-back" type="button">Back</button>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <footer class="cab-foot">
+    <span>Built for <a href="https://retrospect.hackclub.com" target="_blank" rel="noopener">Hack Club Retrospect</a> &amp; <a href="https://flavortown.hackclub.com" target="_blank" rel="noopener">Game Lab / FlavorTown</a></span>
+    <span class="foot-right">HTML5 CANVAS / NO DEPENDENCIES / NODE TESTED</span>
+  </footer>
+</div>
+
+<script src="game.js"></script>
+</body>
+</html>
