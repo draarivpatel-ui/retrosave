@@ -1,0 +1,35 @@
+cff-version: 1.2.0
+message: "If you use this software, please cite it as below."
+title: "RetroSave"
+abstract: >-
+  A zero-dependency 1986 cartridge ROM disassembly workbench and a
+  deterministic dungeon crawler with sprite editing and speedrun replay
+  verification, built in pure JavaScript. Runs entirely in the browser.
+type: software
+license: MIT
+repository-code: "https://github.com/draarivpatel-ui/retrosave"
+url: "https://draarivpatel-ui.github.io/retrosave/"
+keywords:
+  - dungeon-crawler
+  - retro-gaming
+  - chip-8
+  - deterministic
+  - replay-verification
+  - sprite-editor
+  - javascript
+  - zero-dependency
+authors:
+  - family-names: "Patel"
+    given-names: "Aariv"
+    alias: "draarivpatel-ui"
+preferred-citation:
+  type: software
+  title: "RetroSave"
+  version: "1.0.0"
+  date-released: "2026-11-08"
+  license: MIT
+  url: "https://draarivpatel-ui.github.io/retrosave/"
+  authors:
+    - family-names: "Patel"
+      given-names: "Aariv"
+      alias: "draarivpatel-ui"
