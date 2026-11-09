@@ -910,8 +910,6 @@
   const VW = 960;          // logical canvas width
   const VH = 600;          // logical canvas height
   const TP = 24;           // tile size in logical pixels
-  const LEVEL_W = 40;
-  const LEVEL_H = 24;
 
   const canvas = document.getElementById('screen');
   const ctx = canvas.getContext('2d', { alpha: false });
@@ -928,24 +926,44 @@
   const $ = function (id) { return document.getElementById(id); };
   const ui = {
     audioBtn: $('audioBtn'),
+    sheetToggle: $('sheetToggle'),
     seedInput: $('seedInput'),
     hud: $('hud'),
-    banner: $('banner'),
     editorGrid: $('editorGrid'),
     editorHex: $('editorHex'),
     editorName: $('editorName'),
     replayInput: $('replayInput'),
-    scoreList: $('scoreList')
+    scoreList: $('scoreList'),
+    chrRomTableBody: $('chrRomTableBody'),
+    bfsBadge: $('bfsBadge'),
+    telSeed: $('telSeed'),
+    telFnv: $('telFnv'),
+    telFloor: $('telFloor'),
+    telFloorHash: $('telFloorHash'),
+    telRooms: $('telRooms'),
+    telBfs: $('telBfs'),
+    telCoords: $('telCoords'),
+    telBoss: $('telBoss'),
+    telFrame: $('telFrame'),
+    telPos: $('telPos'),
+    telHp: $('telHp'),
+    telScore: $('telScore'),
+    telMask: $('telMask'),
+    telDeltas: $('telDeltas')
   };
 
   /* ----------------------- state ---------------------------------- */
 
   const Game = {
-    mode: 'title',          // title, play, pause, editor, visualizer, scores, gameover, win, replay
-    prevMode: 'title',
+    mode: 'play',           // play, title, pause, editor, visualizer, scores, gameover, win, replay
+    prevMode: 'play',
     sim: null,
     seed: 'RETROSAVE-1986',
     frames: [],             // recorded input masks for the current run
+    deltaCount: 0,
+    lastMask: 0,
+    cachedLevelIdx: -1,
+    cachedReach: null,
     replayFrames: null,     // masks being played back
     replayCursor: 0,
     replayMeta: {},
@@ -963,7 +981,7 @@
     messageUntil: 0,
     editor: {
       pixels: C.parseSpriteMask(C.DEFAULT_SPRITES.player).pixels,
-      color: C.PALETTE.player,
+      color: '#9c2b1b',
       target: 'CUSTOM'
     },
     scores: []
@@ -974,6 +992,17 @@
     Game.mode = m;
     document.body.setAttribute('data-mode', m);
     updatePanels();
+    updateTabs();
+  }
+
+  function updateTabs() {
+    const tabs = document.querySelectorAll('.ds-tab');
+    const activeAct = (Game.mode === 'play' || Game.mode === 'title' || Game.mode === 'gameover' || Game.mode === 'win')
+      ? 'title'
+      : (Game.mode === 'visualizer' ? 'viz' : Game.mode);
+    tabs.forEach(function (tab) {
+      tab.classList.toggle('active', tab.dataset.act === activeAct);
+    });
   }
 
   function updatePanels() {
@@ -983,11 +1012,19 @@
       if (!el) return;
       el.classList.add('hidden');
     });
-    if (Game.mode === 'title') show('panelTitle');
-    else if (Game.mode === 'editor') { show('panelEditor'); buildEditorGrid(); }
-    else if (Game.mode === 'scores') { show('panelScores'); renderScores(); }
-    else if (Game.mode === 'replay') show('panelReplay');
-    else if (Game.mode === 'pause') show('panelPause');
+    if (Game.mode === 'title' || Game.mode === 'play' || Game.mode === 'visualizer' || Game.mode === 'gameover' || Game.mode === 'win') {
+      show('panelTitle');
+    } else if (Game.mode === 'editor') {
+      show('panelEditor');
+      buildEditorGrid();
+    } else if (Game.mode === 'scores') {
+      show('panelScores');
+      renderScores();
+    } else if (Game.mode === 'replay') {
+      show('panelReplay');
+    } else if (Game.mode === 'pause') {
+      show('panelPause');
+    }
   }
 
   function show(id) {
@@ -1019,10 +1056,17 @@
   }
 
   window.addEventListener('keydown', function (e) {
+    if (isTypingTarget(e.target)) {
+      if (e.code === 'Enter' && e.target === ui.seedInput) {
+        e.preventDefault();
+        startGame(ui.seedInput.value);
+      }
+      return;
+    }
     const action = keymap[e.code];
     if (action) {
       e.preventDefault();
-      if (!keys[e.code]) keyState[action] = true; // edge
+      if (!keys[e.code]) keyState[action] = true;
       keys[e.code] = true;
     }
     handleGlobalKeys(e);
@@ -1077,14 +1121,9 @@
     return out;
   }
 
-  function consumeEdge(action) {
-    if (keyState[action]) { keyState[action] = false; return true; }
-    return false;
-  }
-
   /* ----------------------- audio (muted by default) --------------- */
 
-  // Master gain is held at 0 until the user clicks "Enable Audio".
+  // Master gain is held at 0 until the user clicks "PSG AUDIO".
   // No AudioContext is created before that click, so nothing can leak sound.
   const Synth = {
     ctx: null,
@@ -1098,7 +1137,6 @@
       this.master = this.ctx.createGain();
       this.master.gain.value = 0; // strictly silent
       this.master.connect(this.ctx.destination);
-      // Procedural retro pad voices, all routed through the silent master.
       this.voices = [];
     },
     setEnabled: function (on) {
@@ -1148,9 +1186,18 @@
   if (ui.audioBtn) {
     ui.audioBtn.addEventListener('click', function () {
       Synth.setEnabled(!Synth.enabled);
-      ui.audioBtn.textContent = Synth.enabled ? 'Audio: ON' : 'Enable Audio';
+      ui.audioBtn.textContent = Synth.enabled ? 'PSG AUDIO: ON' : 'PSG AUDIO: MUTED';
       ui.audioBtn.classList.toggle('on', Synth.enabled);
-      flashMessage(Synth.enabled ? 'Synth enabled' : 'Audio muted', 1200);
+      flashMessage(Synth.enabled ? 'PSG SYNTH ENABLED' : 'PSG AUDIO MUTED', 1200);
+    });
+  }
+
+  if (ui.sheetToggle) {
+    ui.sheetToggle.addEventListener('click', function () {
+      const cur = document.documentElement.getAttribute('data-sheet') || 'parchment';
+      const next = cur === 'parchment' ? 'charcoal' : 'parchment';
+      document.documentElement.setAttribute('data-sheet', next);
+      ui.sheetToggle.textContent = 'SHEET: ' + next.toUpperCase();
     });
   }
 
@@ -1196,6 +1243,7 @@
       }
       if (ev.type === 'floor') {
         Game.flash = 0.5;
+        Game.cachedLevelIdx = -1;
         flashMessage('FLOOR ' + (ev.level + 1), 1100);
       }
       if (ev.type === 'dash') {
@@ -1221,10 +1269,14 @@
   /* ----------------------- run lifecycle -------------------------- */
 
   function startGame(seed, replayFrames) {
-    Game.seed = String(seed || Game.seed || 'RETROSAVE-1986').toUpperCase();
+    Game.seed = String(seed || Game.seed || 'RETROSAVE-1986').trim().toUpperCase() || 'RETROSAVE-1986';
     if (ui.seedInput) ui.seedInput.value = Game.seed;
     Game.sim = C.makeSim(Game.seed);
     Game.frames = [];
+    Game.deltaCount = 0;
+    Game.lastMask = 0;
+    Game.cachedLevelIdx = -1;
+    Game.cachedReach = null;
     Game.replayFrames = replayFrames || null;
     Game.replayCursor = 0;
     Game.particles = [];
@@ -1234,7 +1286,8 @@
     Game.vizPhase = 0;
     Game.finalScore = null;
     setMode('play');
-    flashMessage(Game.replayFrames ? 'REPLAY START' : 'FLOOR 1', 1100);
+    updateTelemetry();
+    flashMessage(Game.replayFrames ? 'REPLAY VERIFIED // PLAYBACK' : 'SEED ' + Game.seed + ' // FLOOR 1', 1100);
   }
 
   function finishRun() {
@@ -1254,7 +1307,12 @@
   function fixedStep(mask) {
     const sim = Game.sim;
     if (!sim || sim.status !== 'playing') return;
-    C.stepSim(sim, mask);
+    const m = mask >>> 0;
+    if (m !== Game.lastMask) {
+      Game.deltaCount += 1;
+      Game.lastMask = m;
+    }
+    C.stepSim(sim, m);
     drainEvents(sim);
     updateParticles();
     if (Game.flash > 0) Game.flash = Math.max(0, Game.flash - 0.02);
@@ -1267,9 +1325,9 @@
     let mask;
     if (Game.replayFrames) {
       if (Game.replayCursor >= Game.replayFrames.length) {
-        flashMessage('REPLAY END', 1400);
+        flashMessage('REPLAY COMPLETE', 1400);
         Game.replayFrames = null;
-        setMode('title');
+        setMode('pause');
         return;
       }
       mask = Game.replayFrames[Game.replayCursor] >>> 0;
@@ -1279,6 +1337,101 @@
       Game.frames.push(mask);
     }
     fixedStep(mask);
+  }
+
+  function stepSingleFrame() {
+    if (!Game.sim || Game.sim.status !== 'playing') {
+      startGame(Game.seed);
+    }
+    if (Game.mode === 'play') {
+      setMode('pause');
+    }
+    const mask = C.encodeInput(currentInput());
+    Game.frames.push(mask);
+    fixedStep(mask);
+    updateTelemetry();
+    flashMessage('STEP FRAME ' + Game.sim.frame, 700);
+  }
+
+  /* ----------------------- telemetry & CHR-ROM table -------------- */
+
+  function buildChrRomTable() {
+    if (!ui.chrRomTableBody) return;
+    const names = Object.keys(C.DEFAULT_SPRITES);
+    let html = '';
+    names.forEach(function (name, idx) {
+      const parsed = C.parseSpriteMask(C.DEFAULT_SPRITES[name]);
+      const addr = '0x' + (idx * 8).toString(16).toUpperCase().padStart(4, '0');
+      html += '<tr data-sprite="' + name + '" title="Click to load ' + name.toUpperCase() + ' into 8x8 CHR-ROM Editor">' +
+        '<td>' + addr + '</td>' +
+        '<td>' + name.toUpperCase() + '</td>' +
+        '<td class="hex-cell">' + parsed.hex + '</td>' +
+        '<td>' + parsed.bitcount + '/64</td>' +
+        '</tr>';
+    });
+    ui.chrRomTableBody.innerHTML = html;
+
+    ui.chrRomTableBody.addEventListener('click', function (e) {
+      const row = e.target.closest('tr[data-sprite]');
+      if (!row) return;
+      const spName = row.dataset.sprite;
+      if (C.DEFAULT_SPRITES[spName]) {
+        if (ui.editorName) ui.editorName.value = spName.toUpperCase();
+        editorLoadHex(C.DEFAULT_SPRITES[spName]);
+        setMode('editor');
+      }
+    });
+  }
+
+  function updateTelemetry() {
+    const sim = Game.sim;
+    if (!sim) return;
+    const lv = sim.level;
+    if (Game.cachedLevelIdx !== sim.levelIndex || !Game.cachedReach) {
+      Game.cachedLevelIdx = sim.levelIndex;
+      Game.cachedReach = C.levelReachable(lv);
+      const seedHash = C.hashSeed(sim.seed) >>> 0;
+      const floorSeed = (seedHash ^ Math.imul(sim.levelIndex + 1, 0x9e3779b1)) >>> 0;
+      if (ui.telSeed) ui.telSeed.textContent = sim.seed;
+      if (ui.telFnv) ui.telFnv.textContent = '0x' + C.fnv1a(sim.seed);
+      if (ui.telFloor) ui.telFloor.textContent = String(sim.levelIndex + 1).padStart(2, '0') + ' / 12';
+      if (ui.telFloorHash) ui.telFloorHash.textContent = '0x' + floorSeed.toString(16).padStart(8, '0');
+      if (ui.telRooms) ui.telRooms.textContent = lv.rooms.length + ' NON-OVERLAPPING';
+      if (ui.telBfs) ui.telBfs.textContent = Game.cachedReach.reachable + ' / ' + Game.cachedReach.floors + ' TILES';
+      if (ui.bfsBadge) {
+        ui.bfsBadge.textContent = Game.cachedReach.connected
+          ? 'BFS CONNECTED: 100% (' + Game.cachedReach.reachable + ' TILES)'
+          : 'BFS DISCONNECTED';
+      }
+      if (ui.telCoords) {
+        ui.telCoords.textContent = '(' + lv.spawn.x + ',' + lv.spawn.y + ') -> (' + lv.exit.x + ',' + lv.exit.y + ')';
+      }
+    }
+    if (ui.telBoss) {
+      ui.telBoss.textContent = lv.boss
+        ? (lv.boss.dead ? lv.boss.kind + ' (DEFEATED)' : lv.boss.kind + ' (' + lv.boss.hp + ' HP)')
+        : 'NONE (FLOOR 3/6/9/12)';
+    }
+    if (ui.telFrame) {
+      ui.telFrame.textContent = String(sim.frame).padStart(4, '0') + ' (' + C.formatTime(sim.frame) + ')';
+    }
+    if (ui.telPos) {
+      ui.telPos.textContent = '(' + sim.player.x.toFixed(2) + ', ' + sim.player.y.toFixed(2) + ')';
+    }
+    if (ui.telHp) {
+      ui.telHp.textContent = sim.player.hp + ' HP / ' + sim.lives + ' LIVES';
+    }
+    if (ui.telScore) {
+      ui.telScore.textContent = String(sim.score).padStart(6, '0');
+    }
+    if (ui.telMask) {
+      const m = Game.lastMask & 0x7f;
+      ui.telMask.textContent = '0x' + m.toString(16).toUpperCase().padStart(2, '0') +
+        ' (' + m.toString(2).padStart(7, '0') + 'b)';
+    }
+    if (ui.telDeltas) {
+      ui.telDeltas.textContent = Game.deltaCount + ' CHANGE PTS / ' + Game.frames.length + 'F';
+    }
   }
 
   /* ----------------------- score storage -------------------------- */
@@ -1310,10 +1463,10 @@
     const all = loadScores();
     Game.scores = all;
     if (!all.length) {
-      ui.scoreList.innerHTML = '<div class="empty">No runs logged yet. Go set a time.</div>';
+      ui.scoreList.innerHTML = '<div class="empty">No RSCORE1 records stored in localStorage yet. Complete or finish a run to log a checksummed entry.</div>';
       return;
     }
-    let html = '<div class="score-head"><span>#</span><span>NAME</span><span>SCORE</span><span>FLOOR</span><span>TIME</span><span>SEED</span></div>';
+    let html = '<div class="score-head"><span>#</span><span>TAG</span><span>SCORE</span><span>FLR</span><span>TIME</span><span>SEED</span></div>';
     all.forEach(function (e, i) {
       html += '<div class="score-row"><span>' + (i + 1) +
         '</span><span>' + esc(e.name) + '</span><span>' + e.score +
@@ -1332,8 +1485,7 @@
   /* ----------------------- replay helpers ------------------------- */
 
   function exportReplay() {
-    const frames = Game.frames.length ? Game.frames : (Game.replayFrames || []);
-    if (!frames.length) { flashMessage('No run recorded yet', 1400); return ''; }
+    const frames = Game.frames.length ? Game.frames : (Game.replayFrames || [0]);
     const str = C.serializeReplay({
       seed: Game.seed,
       frames: frames,
@@ -1350,7 +1502,7 @@
   function importReplay() {
     if (!ui.replayInput) return;
     const parsed = C.parseReplay(ui.replayInput.value.trim());
-    if (!parsed) { flashMessage('Invalid or corrupt replay', 1600); return; }
+    if (!parsed) { flashMessage('FNV-1A CHECKSUM OR PAYLOAD INVALID', 1600); return; }
     Game.seed = parsed.seed;
     startGame(parsed.seed, parsed.frames);
     if (parsed.meta) Game.replayMeta = parsed.meta;
@@ -1361,12 +1513,12 @@
     if (!str) return;
     if (navigator.clipboard && navigator.clipboard.writeText) {
       navigator.clipboard.writeText(str).then(function () {
-        flashMessage('Replay copied to clipboard', 1400);
+        flashMessage('RSAVE1 TOKEN COPIED', 1400);
       }, function () {
-        flashMessage('Select the text and copy', 1600);
+        flashMessage('TOKEN READY IN REPLAY VERIFIER', 1600);
       });
     } else {
-      flashMessage('Select the text and copy', 1600);
+      flashMessage('TOKEN READY IN REPLAY VERIFIER', 1600);
     }
   }
 
@@ -1377,11 +1529,16 @@
     if (code === 'Escape') {
       if (Game.mode === 'play') setMode('pause');
       else if (Game.mode === 'pause') setMode('play');
-      else if (Game.mode !== 'title') setMode('title');
+      else setMode('play');
+      return;
+    }
+    if (code === 'Period') {
+      e.preventDefault();
+      stepSingleFrame();
       return;
     }
     if (code === 'KeyE' && !isTypingTarget(e.target)) {
-      if (Game.mode === 'editor') setMode(Game.prevMode === 'editor' ? 'title' : Game.prevMode);
+      if (Game.mode === 'editor') setMode('play');
       else { Game.editorReturn = Game.mode; setMode('editor'); }
       return;
     }
@@ -1393,7 +1550,7 @@
       if (ui.audioBtn) ui.audioBtn.click();
       return;
     }
-    if ((code === 'Enter' || code === 'KeyP') && Game.mode === 'title') {
+    if ((code === 'Enter' || code === 'KeyP') && (Game.mode === 'title' || Game.mode === 'gameover' || Game.mode === 'win')) {
       startGame(ui.seedInput ? ui.seedInput.value : Game.seed);
     } else if ((code === 'Enter' || code === 'KeyP') && Game.mode === 'pause') {
       setMode('play');
@@ -1407,8 +1564,8 @@
   }
 
   function toggleVisualizer() {
-    if (Game.mode === 'visualizer') setMode('title');
-    else { Game.visualizerReturn = Game.mode === 'title' ? 'title' : Game.mode; setMode('visualizer'); }
+    if (Game.mode === 'visualizer') setMode('play');
+    else setMode('visualizer');
   }
 
   /* ----------------------- sprite editor -------------------------- */
@@ -1424,6 +1581,7 @@
     }
     ui.editorGrid.innerHTML = html;
     refreshEditorHex();
+    drawEditorPreview();
   }
 
   function refreshEditorHex() {
@@ -1467,10 +1625,10 @@
       Game.editor.pixels = parsed.pixels;
       buildEditorGrid();
       drawEditorPreview();
-      flashMessage('Sprite loaded', 1000);
+      flashMessage('CHR-ROM MASK LOADED', 1000);
       return true;
     } catch (err) {
-      flashMessage('Invalid sprite mask', 1400);
+      flashMessage('INVALID 8-ROW HEX MASK', 1400);
       return false;
     }
   }
@@ -1512,12 +1670,12 @@
     a.click();
     document.body.removeChild(a);
     setTimeout(function () { URL.revokeObjectURL(url); }, 1000);
-    flashMessage('Sprite exported', 1200);
+    flashMessage('SPRITE JSON EXPORTED', 1200);
   }
 
   /* ----------------------- visualizer ----------------------------- */
 
-  function updateVisualizer(dt, now) {
+  function updateVisualizer(dt) {
     Game.vizPhase += dt * 1.6;
     const seedRng = new C.RNG(Math.floor(Game.vizPhase * 8));
     for (let i = 0; i < Game.vizBars.length; i += 1) {
@@ -1539,14 +1697,20 @@
         startGame(ui.seedInput ? ui.seedInput.value : Game.seed);
         break;
       case 'resume': setMode('play'); break;
-      case 'pause': if (Game.mode === 'play') setMode('pause'); break;
-      case 'quit': setMode('title'); break;
+      case 'pause':
+        if (Game.mode === 'play') setMode('pause');
+        else if (Game.mode === 'pause') setMode('play');
+        break;
+      case 'step-frame':
+        stepSingleFrame();
+        break;
+      case 'quit': setMode('play'); break;
       case 'scores': setMode('scores'); break;
-      case 'title': setMode('title'); break;
+      case 'title': setMode('play'); break;
       case 'editor': Game.editorReturn = Game.mode; setMode('editor'); break;
-      case 'editor-back': setMode(Game.editorReturn === 'editor' ? 'title' : (Game.editorReturn || 'title')); break;
+      case 'editor-back': setMode('play'); break;
       case 'viz': toggleVisualizer(); break;
-      case 'replay': setMode('replay'); break;
+      case 'replay': exportReplay(); setMode('replay'); break;
       case 'export-replay': exportReplay(); break;
       case 'copy-replay': copyReplay(); break;
       case 'import-replay': importReplay(); break;
@@ -1573,12 +1737,13 @@
         break;
       case 'export-sprite': exportSprite(); break;
       case 'apply-sprite':
-        Game.editor.color = C.PALETTE.player;
-        Object.keys(C.DEFAULT_SPRITES).forEach(function () { /* keep defaults */ });
-        flashMessage('Sprite applied to player', 1200);
+        spriteCache.player = Game.editor.pixels.map(function (r) { return r.slice(); });
+        spriteCache.playerAlt = Game.editor.pixels.map(function (r) { return r.slice(); });
+        flashMessage('PLAYER CHR-ROM PATCHED', 1200);
+        setMode('play');
         break;
       case 'retry': startGame(Game.seed); break;
-      case 'save-run': exportReplay(); setMode('scores'); break;
+      case 'save-run': exportReplay(); setMode('replay'); break;
       default: break;
     }
   });
@@ -1614,8 +1779,25 @@
     }
   }
 
+  // Hardware ROM monitor colors for the dungeon viewport
+  const VIEWPORT_COLORS = {
+    bg: '#100e0b',
+    wall: '#262119',
+    wallEdge: '#473e30',
+    floor: '#171410',
+    floorDot: '#2c261d',
+    player: '#f0b44c',
+    enemy: '#d9534f',
+    boss: '#ff8533',
+    bullet: '#fff0b3',
+    pickup: '#5cd685',
+    exit: '#d9822b',
+    hud: '#ede4d3',
+    hudDim: '#8c8270'
+  };
+
   function drawLevel(g, level) {
-    g.fillStyle = C.PALETTE.bg;
+    g.fillStyle = VIEWPORT_COLORS.bg;
     g.fillRect(0, 0, VW, VH);
     const ox = 0;
     const oy = 0;
@@ -1625,24 +1807,24 @@
         const sx = ox + x * TP;
         const sy = oy + y * TP;
         if (t === C.TILE.WALL) {
-          g.fillStyle = C.PALETTE.wall;
+          g.fillStyle = VIEWPORT_COLORS.wall;
           g.fillRect(sx, sy, TP, TP);
-          g.fillStyle = C.PALETTE.wallEdge;
-          g.fillRect(sx, sy, TP, 2);
-          g.fillRect(sx, sy, 2, TP);
+          g.fillStyle = VIEWPORT_COLORS.wallEdge;
+          g.fillRect(sx, sy, TP, 1);
+          g.fillRect(sx, sy, 1, TP);
         } else {
-          g.fillStyle = C.PALETTE.floor;
+          g.fillStyle = VIEWPORT_COLORS.floor;
           g.fillRect(sx, sy, TP, TP);
-          g.fillStyle = C.PALETTE.floorDot;
+          g.fillStyle = VIEWPORT_COLORS.floorDot;
           g.fillRect(sx + TP / 2, sy + TP / 2, 2, 2);
           if (t === C.TILE.EXIT) {
-            g.strokeStyle = C.PALETTE.exit;
+            g.strokeStyle = VIEWPORT_COLORS.exit;
             g.lineWidth = 2;
             g.strokeRect(sx + 4, sy + 4, TP - 8, TP - 8);
-            g.fillStyle = C.PALETTE.exit;
+            g.fillStyle = VIEWPORT_COLORS.exit;
             g.fillRect(sx + 9, sy + 9, 6, 6);
           } else if (t === C.TILE.SPAWN) {
-            g.strokeStyle = C.PALETTE.hudDim;
+            g.strokeStyle = VIEWPORT_COLORS.hudDim;
             g.lineWidth = 1;
             g.strokeRect(sx + 3, sy + 3, TP - 6, TP - 6);
           }
@@ -1654,7 +1836,7 @@
     for (let i = 0; i < level.pickups.length; i += 1) {
       const pk = level.pickups[i];
       if (pk.taken) continue;
-      drawSprite(g, 'pickup', ox + pk.x * TP + 2, oy + pk.y * TP + 2, (TP - 4) / 8, C.PALETTE.pickup);
+      drawSprite(g, 'pickup', ox + pk.x * TP + 2, oy + pk.y * TP + 2, (TP - 4) / 8, VIEWPORT_COLORS.pickup);
     }
 
     // enemies
@@ -1662,7 +1844,7 @@
       const en = level.enemies[i];
       if (en.dead) continue;
       const nm = en.kind === 'DRONE' ? 'drone' : (en.kind === 'SENTINEL' ? 'sentinel' : 'grunt');
-      drawSprite(g, nm, ox + en.x * TP + 2, oy + en.y * TP, (TP - 4) / 8, C.PALETTE.enemy);
+      drawSprite(g, nm, ox + en.x * TP + 2, oy + en.y * TP, (TP - 4) / 8, VIEWPORT_COLORS.enemy);
     }
 
     // boss
@@ -1670,13 +1852,12 @@
       const b = level.boss;
       const pulse = 0.85 + 0.15 * Math.sin(Game.vizPhase * 4);
       g.globalAlpha = pulse;
-      drawSprite(g, 'boss', ox + b.x * TP - 12, oy + b.y * TP - 12, (TP + 24) / 8, C.PALETTE.boss);
+      drawSprite(g, 'boss', ox + b.x * TP - 12, oy + b.y * TP - 12, (TP + 24) / 8, VIEWPORT_COLORS.boss);
       g.globalAlpha = 1;
-      // boss hp bar
       const maxHp = 6 + (Game.sim ? Game.sim.levelIndex : 0) * 2;
       g.fillStyle = '#301a08';
       g.fillRect(ox + b.x * TP - 20, oy + b.y * TP - 30, 64, 5);
-      g.fillStyle = C.PALETTE.boss;
+      g.fillStyle = VIEWPORT_COLORS.boss;
       g.fillRect(ox + b.x * TP - 20, oy + b.y * TP - 30, 64 * Math.max(0, b.hp) / maxHp, 5);
     }
   }
@@ -1684,7 +1865,7 @@
   function drawBullets(g, sim) {
     for (let i = 0; i < sim.bullets.length; i += 1) {
       const b = sim.bullets[i];
-      g.fillStyle = C.PALETTE.bullet;
+      g.fillStyle = VIEWPORT_COLORS.bullet;
       g.fillRect(b.x * TP - 3, b.y * TP - 3, 6, 6);
       g.globalAlpha = 0.35;
       g.fillRect(b.x * TP - 6, b.y * TP - 6, 12, 12);
@@ -1697,9 +1878,8 @@
     if (p.invuln > 0 && Math.floor(p.invuln / 3) % 2 === 0) return;
     const useAlt = Math.floor(sim.frame / 12) % 2 === 0;
     const spr = useAlt ? 'player' : 'playerAlt';
-    drawSprite(g, spr, p.x * TP - 12, p.y * TP - 12, TP / 8, C.PALETTE.player);
-    // facing pip
-    g.fillStyle = C.PALETTE.bullet;
+    drawSprite(g, spr, p.x * TP - 12, p.y * TP - 12, TP / 8, VIEWPORT_COLORS.player);
+    g.fillStyle = VIEWPORT_COLORS.bullet;
     g.fillRect(p.x * TP + p.facing.x * 9 - 1, p.y * TP + p.facing.y * 9 - 1, 3, 3);
   }
 
@@ -1714,59 +1894,59 @@
   }
 
   function drawHUD(g, sim) {
-    g.fillStyle = 'rgba(5,6,10,0.82)';
-    g.fillRect(0, 0, VW, 34);
-    g.fillStyle = C.PALETTE.hudDim;
-    g.fillRect(0, 33, VW, 1);
-    g.font = 'bold 15px "Courier New", monospace';
+    g.fillStyle = 'rgba(14,12,9,0.88)';
+    g.fillRect(0, 0, VW, 32);
+    g.fillStyle = VIEWPORT_COLORS.wallEdge;
+    g.fillRect(0, 31, VW, 1);
+    g.font = 'bold 14px "Courier New", monospace';
     g.textBaseline = 'middle';
-    g.fillStyle = C.PALETTE.player;
-    g.fillText('SCORE ' + String(sim.score).padStart(6, '0'), 14, 17);
-    g.fillStyle = C.PALETTE.hud;
-    g.fillText('FLOOR ' + (sim.levelIndex + 1), 220, 17);
-    g.fillStyle = C.PALETTE.bullet;
-    g.fillText('TIME ' + C.formatTime(sim.frame), 340, 17);
-    // lives / hp
-    let hx = 560;
+    g.fillStyle = VIEWPORT_COLORS.player;
+    g.fillText('SCORE ' + String(sim.score).padStart(6, '0'), 14, 16);
+    g.fillStyle = VIEWPORT_COLORS.hud;
+    g.fillText('FLR ' + String(sim.levelIndex + 1).padStart(2, '0') + '/12', 190, 16);
+    g.fillStyle = VIEWPORT_COLORS.bullet;
+    g.fillText('CLK ' + C.formatTime(sim.frame) + ' [F:' + sim.frame + ']', 310, 16);
+    let hx = 545;
     for (let i = 0; i < 5; i += 1) {
-      g.fillStyle = i < sim.player.hp ? C.PALETTE.pickup : '#20283c';
-      g.fillRect(hx + i * 16, 11, 12, 12);
+      g.fillStyle = i < sim.player.hp ? VIEWPORT_COLORS.pickup : '#2e2920';
+      g.fillRect(hx + i * 15, 10, 11, 11);
     }
-    g.fillStyle = C.PALETTE.enemy;
-    g.fillText('LIVES ' + sim.lives, 660, 17);
-    g.fillStyle = C.PALETTE.hudDim;
-    g.fillText(Game.replayFrames ? 'REPLAY' : Game.seed, 760, 17);
+    g.fillStyle = VIEWPORT_COLORS.enemy;
+    g.fillText('LIVES:' + sim.lives, 635, 16);
+    g.fillStyle = VIEWPORT_COLORS.hudDim;
+    g.fillText(Game.replayFrames ? 'REPLAY VERIFY' : 'SEED:' + Game.seed.slice(0, 14), 730, 16);
 
-    // dash meter
     const cd = sim.player.dashCooldown;
-    g.fillStyle = '#20283c';
-    g.fillRect(14, VH - 18, 120, 8);
-    g.fillStyle = cd <= 0 ? C.PALETTE.player : C.PALETTE.hudDim;
-    g.fillRect(14, VH - 18, 120 * (1 - cd / 60), 8);
-    g.font = '11px "Courier New", monospace';
-    g.fillStyle = C.PALETTE.hudDim;
-    g.fillText('DASH', 140, VH - 13);
+    g.fillStyle = '#2e2920';
+    g.fillRect(14, VH - 16, 110, 7);
+    g.fillStyle = cd <= 0 ? VIEWPORT_COLORS.player : VIEWPORT_COLORS.hudDim;
+    g.fillRect(14, VH - 16, 110 * (1 - cd / 60), 7);
+    g.font = '10px "Courier New", monospace';
+    g.fillStyle = VIEWPORT_COLORS.hudDim;
+    g.fillText('DASH CD', 132, VH - 12);
   }
 
   function drawCenterText(g, title, subtitle, accent) {
-    g.fillStyle = 'rgba(5,6,10,0.72)';
-    g.fillRect(0, VH / 2 - 90, VW, 180);
+    g.fillStyle = 'rgba(14,12,9,0.84)';
+    g.fillRect(0, VH / 2 - 75, VW, 150);
+    g.strokeStyle = VIEWPORT_COLORS.wallEdge;
+    g.strokeRect(1, VH / 2 - 75, VW - 2, 150);
     g.textAlign = 'center';
-    g.font = 'bold 46px "Courier New", monospace';
-    g.fillStyle = accent || C.PALETTE.player;
+    g.font = 'bold 38px "Courier New", monospace';
+    g.fillStyle = accent || VIEWPORT_COLORS.player;
     g.fillText(title, VW / 2, VH / 2 - 18);
-    g.font = '16px "Courier New", monospace';
-    g.fillStyle = C.PALETTE.hud;
-    g.fillText(subtitle, VW / 2, VH / 2 + 24);
+    g.font = '15px "Courier New", monospace';
+    g.fillStyle = VIEWPORT_COLORS.hud;
+    g.fillText(subtitle, VW / 2, VH / 2 + 18);
     g.font = '12px "Courier New", monospace';
-    g.fillStyle = C.PALETTE.hudDim;
-    g.fillText('ENTER to continue   /   ESC for title', VW / 2, VH / 2 + 54);
+    g.fillStyle = VIEWPORT_COLORS.hudDim;
+    g.fillText('ENTER: RESUME / RESTART   |   PERIOD (.): STEP +1 FRAME', VW / 2, VH / 2 + 48);
     g.textAlign = 'left';
   }
 
   function drawScene(now) {
     const g = sctx;
-    if (Game.mode === 'visualizer' || (Game.mode === 'title' && !Game.sim)) {
+    if (Game.mode === 'visualizer') {
       drawVisualizerScene(g);
     } else if (Game.sim) {
       g.save();
@@ -1779,133 +1959,67 @@
       drawPlayer(g, Game.sim);
       g.restore();
       drawHUD(g, Game.sim);
-      if (Game.mode === 'pause') drawCenterText(g, 'PAUSED', 'The dungeon waits. Take your time.', C.PALETTE.bullet);
-      if (Game.mode === 'gameover') drawCenterText(g, 'GAME OVER', 'Score ' + (Game.finalScore ? Game.finalScore.score : 0) + '  |  ' + C.formatTime(Game.sim.frame), C.PALETTE.danger);
-      if (Game.mode === 'win') drawCenterText(g, 'RETRO SAVED', 'All 12 floors cleared. Legendary.', C.PALETTE.pickup);
+      if (Game.mode === 'pause') drawCenterText(g, 'HALTED // FRAME ' + Game.sim.frame, 'Fixed dt = 16.667 ms. Press . to step 1 frame or Enter to resume.', VIEWPORT_COLORS.bullet);
+      if (Game.mode === 'gameover') drawCenterText(g, 'RUN TERMINATED', 'SCORE ' + (Game.finalScore ? Game.finalScore.score : 0) + '  |  CLK ' + C.formatTime(Game.sim.frame), VIEWPORT_COLORS.enemy);
+      if (Game.mode === 'win') drawCenterText(g, 'ALL 12 FLOORS VERIFIED', 'FINAL SCORE ' + (Game.finalScore ? Game.finalScore.score : 0) + '  |  CLK ' + C.formatTime(Game.sim.frame), VIEWPORT_COLORS.pickup);
     } else {
       drawVisualizerScene(g);
     }
 
-    // message toast
     if (Game.message && now < Game.messageUntil) {
       g.textAlign = 'center';
-      g.font = 'bold 18px "Courier New", monospace';
-      g.fillStyle = C.PALETTE.bullet;
-      g.fillText(Game.message, VW / 2, 60);
+      g.font = 'bold 15px "Courier New", monospace';
+      g.fillStyle = VIEWPORT_COLORS.bullet;
+      g.fillText(Game.message, VW / 2, 52);
       g.textAlign = 'left';
     }
 
     if (Game.flash > 0) {
-      g.fillStyle = 'rgba(255,255,255,' + (Game.flash * 0.35).toFixed(3) + ')';
+      g.fillStyle = 'rgba(255,240,200,' + (Game.flash * 0.28).toFixed(3) + ')';
       g.fillRect(0, 0, VW, VH);
     }
   }
 
   function drawVisualizerScene(g) {
-    const pal = C.PALETTE;
-    g.fillStyle = pal.bg;
+    g.fillStyle = VIEWPORT_COLORS.bg;
     g.fillRect(0, 0, VW, VH);
     const t = Game.vizPhase;
-    // starfield
-    const rng = new C.RNG(1337);
-    for (let i = 0; i < 90; i += 1) {
-      const x = rng.next() * VW;
-      const y = rng.next() * VH;
-      const tw = 0.3 + 0.7 * Math.abs(Math.sin(t * 1.2 + i));
-      g.globalAlpha = tw * 0.5;
-      g.fillStyle = i % 3 === 0 ? pal.player : pal.hudDim;
-      const s = 1 + (i % 3);
-      g.fillRect(x, (y + t * 8) % VH, s, s);
-    }
-    g.globalAlpha = 1;
-    // retro sun
-    const cx = VW / 2;
-    const cy = 250;
-    const grad = g.createLinearGradient(0, cy - 120, 0, cy + 120);
-    grad.addColorStop(0, pal.boss);
-    grad.addColorStop(1, pal.enemy);
-    g.save();
-    g.beginPath();
-    g.arc(cx, cy, 110, 0, Math.PI * 2);
-    g.clip();
-    g.fillStyle = grad;
-    g.fillRect(cx - 120, cy - 120, 240, 240);
-    g.fillStyle = pal.bg;
-    for (let i = 0; i < 9; i += 1) {
-      const by = cy + 8 + i * 12;
-      g.fillRect(cx - 120, by + Math.sin(t + i) * 2, 240, 3 + i);
-    }
-    g.restore();
-    // grid horizon
-    g.strokeStyle = pal.exit;
-    g.globalAlpha = 0.5;
+    // Oscilloscope grid
+    g.strokeStyle = '#241f18';
     g.lineWidth = 1;
-    for (let i = -10; i <= 10; i += 1) {
-      g.beginPath();
-      g.moveTo(cx + i * 26, 360);
-      g.lineTo(cx + i * 200, VH);
-      g.stroke();
+    for (let x = 0; x < VW; x += 48) {
+      g.beginPath(); g.moveTo(x, 0); g.lineTo(x, VH); g.stroke();
     }
-    for (let j = 0; j < 14; j += 1) {
-      const yy = 360 + (j * j) * 1.6 + (t * 30) % 22;
-      g.globalAlpha = 0.4 - j * 0.02;
-      g.beginPath();
-      g.moveTo(0, yy);
-      g.lineTo(VW, yy);
-      g.stroke();
+    for (let y = 0; y < VH; y += 48) {
+      g.beginPath(); g.moveTo(0, y); g.lineTo(VW, y); g.stroke();
     }
-    g.globalAlpha = 1;
-    // spectrum bars
     const bw = VW / Game.vizBars.length;
     for (let i = 0; i < Game.vizBars.length; i += 1) {
-      const h = Game.vizBars[i] * 150;
-      const hue = i / Game.vizBars.length;
-      g.fillStyle = i % 2 ? pal.player : pal.enemy;
-      g.globalAlpha = 0.75;
-      g.fillRect(i * bw + 2, VH - h, bw - 4, h);
-      g.fillStyle = pal.bullet;
-      g.fillRect(i * bw + 2, VH - h - 4, bw - 4, 3);
+      const h = Game.vizBars[i] * 320;
+      g.fillStyle = i % 2 ? VIEWPORT_COLORS.player : VIEWPORT_COLORS.exit;
+      g.fillRect(i * bw + 3, VH - h - 40, bw - 6, h);
+      g.fillStyle = VIEWPORT_COLORS.bullet;
+      g.fillRect(i * bw + 3, VH - h - 45, bw - 6, 3);
     }
-    g.globalAlpha = 1;
-    // title
     g.textAlign = 'center';
-    g.font = 'bold 54px "Courier New", monospace';
-    g.fillStyle = pal.player;
-    g.fillText('RETROSAVE', cx, 120);
-    g.font = '14px "Courier New", monospace';
-    g.fillStyle = pal.hud;
-    g.fillText('procedural synth visualizer  /  press V to return', cx, 148);
-    g.fillStyle = pal.hudDim;
-    g.fillText('seed: ' + Game.seed, cx, VH - 8);
+    g.font = 'bold 28px "Courier New", monospace';
+    g.fillStyle = VIEWPORT_COLORS.player;
+    g.fillText('PSG 48-BAND SPECTRUM ANALYZER', VW / 2, 80);
+    g.font = '13px "Courier New", monospace';
+    g.fillStyle = VIEWPORT_COLORS.hud;
+    g.fillText('SEED: ' + Game.seed + '  |  PRESS V OR CLICK TAB 01 TO RETURN TO DUNGEON VIEWPORT', VW / 2, 112);
     g.textAlign = 'left';
   }
 
-  function drawCRT(now) {
+  function drawCRT() {
     ctx.drawImage(scene, 0, 0);
-    // scanlines
-    ctx.fillStyle = C.PALETTE.scan;
+    ctx.fillStyle = 'rgba(0,0,0,0.22)';
     for (let y = 0; y < VH; y += 3) ctx.fillRect(0, y, VW, 1);
-    // moving bright scan band
-    const band = (now * 0.06) % VH;
-    ctx.fillStyle = 'rgba(125,249,255,0.03)';
-    ctx.fillRect(0, band, VW, 6);
-    // vignette
-    const vg = ctx.createRadialGradient(VW / 2, VH / 2, VH * 0.3, VW / 2, VH / 2, VH * 0.85);
-    vg.addColorStop(0, 'rgba(0,0,0,0)');
-    vg.addColorStop(1, C.PALETTE.vignette);
-    ctx.fillStyle = vg;
-    ctx.fillRect(0, 0, VW, VH);
-    // subtle chromatic edge
-    ctx.globalAlpha = 0.05;
-    ctx.fillStyle = C.PALETTE.enemy;
-    ctx.fillRect(0, 0, 3, VH);
-    ctx.fillStyle = C.PALETTE.player;
-    ctx.fillRect(VW - 3, 0, 3, VH);
-    ctx.globalAlpha = 1;
   }
 
   /* ----------------------- main loop ------------------------------ */
 
+  let lastTelUpdate = 0;
   function frame(now) {
     if (!Game.lastTime) Game.lastTime = now;
     let dt = (now - Game.lastTime) / 1000;
@@ -1929,20 +2043,24 @@
     updateVisualizer(dt, now);
     drawScene(now);
     drawCRT(now);
-    updateHudText();
+    if (now - lastTelUpdate > 80) {
+      updateTelemetry();
+      updateHudText();
+      lastTelUpdate = now;
+    }
     requestAnimationFrame(frame);
   }
 
   function updateHudText() {
     if (!ui.hud) return;
     const bits = [];
-    if (Game.mode === 'play') {
-      bits.push('FPS 60');
-      bits.push(Game.replayFrames ? 'REPLAY ' + Game.replayCursor + '/' + Game.replayFrames.length : 'REC ' + Game.frames.length);
+    bits.push('DT 16.67MS');
+    if (Game.sim) {
+      bits.push(Game.replayFrames ? 'VERIFY ' + Game.replayCursor + '/' + Game.replayFrames.length : 'REC ' + Game.frames.length + 'F');
     }
-    bits.push('AUDIO ' + (Synth.enabled ? 'ON' : 'MUTED'));
-    bits.push('MODE ' + Game.mode.toUpperCase());
-    ui.hud.textContent = bits.join('   |   ');
+    bits.push('PSG ' + (Synth.enabled ? 'ON' : 'MUTED'));
+    bits.push('STATE ' + Game.mode.toUpperCase());
+    ui.hud.textContent = bits.join(' | ');
   }
 
   /* ----------------------- boot ----------------------------------- */
@@ -1952,12 +2070,14 @@
   if (seedParam) Game.seed = seedParam.toUpperCase();
   if (ui.seedInput) ui.seedInput.value = Game.seed;
   Game.scores = loadScores();
+  buildChrRomTable();
   buildEditorGrid();
   drawEditorPreview();
-  setMode('title');
+  // Boot immediately into a live, playable Floor 1 run on load
+  startGame(Game.seed);
   requestAnimationFrame(frame);
 
-  // Expose a tiny debug handle for the browser console and manual testing.
+  // Expose a debug handle for browser console and deterministic testing.
   window.RetroSave = {
     Game: Game,
     Core: C,
