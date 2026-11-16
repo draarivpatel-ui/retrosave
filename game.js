@@ -6,15 +6,47 @@
 (function (global) {
   'use strict';
 
+  const ENGINE_VERSION = '2.0.0';
+  const MAX_REPLAY_FRAMES = 216000;
+  const MAX_RECORD_CHARS = 4 * 1024 * 1024;
+
+  function finiteNumber(value, label) {
+    if (typeof value !== 'number' || !Number.isFinite(value)) throw new TypeError(label + ' must be a finite number');
+    return value;
+  }
+
+  function boundedInteger(value, min, max, label) {
+    if (!Number.isSafeInteger(value) || value < min || value > max) throw new RangeError(label + ' must be an integer from ' + min + ' to ' + max);
+    return value;
+  }
+
+  function seedText(value) {
+    if (typeof value !== 'string' || !value.trim() || value.length > 128 || /[\x00-\x1f\x7f]/.test(value)) throw new TypeError('seed needs 1 to 128 characters without control characters');
+    return value;
+  }
+
+  function utf8Bytes(value) {
+    const bytes = [];
+    for (const char of String(value)) {
+      let code = char.codePointAt(0);
+      if (code >= 0xd800 && code <= 0xdfff) code = 0xfffd;
+      if (code < 128) bytes.push(code);
+      else if (code < 2048) bytes.push(0xc0 | (code >> 6), 0x80 | (code & 63));
+      else if (code < 65536) bytes.push(0xe0 | (code >> 12), 0x80 | ((code >> 6) & 63), 0x80 | (code & 63));
+      else bytes.push(0xf0 | (code >> 18), 0x80 | ((code >> 12) & 63), 0x80 | ((code >> 6) & 63), 0x80 | (code & 63));
+    }
+    return bytes;
+  }
+
   /* ------------------------------------------------------------------ */
   /* Deterministic RNG (mulberry32)                                      */
   /* ------------------------------------------------------------------ */
 
   function hashSeed(value) {
-    const str = String(value);
+    const bytes = utf8Bytes(value);
     let h = 0x811c9dc5;
-    for (let i = 0; i < str.length; i += 1) {
-      h ^= str.charCodeAt(i) & 0xff;
+    for (let i = 0; i < bytes.length; i += 1) {
+      h ^= bytes[i];
       h = Math.imul(h, 0x01000193) >>> 0;
     }
     return h >>> 0;
@@ -38,18 +70,25 @@
   };
 
   RNG.prototype.int = function (min, max) {
+    boundedInteger(min, -0x7fffffff, 0x7fffffff, 'minimum');
+    boundedInteger(max, min, 0x7fffffff, 'maximum');
     return min + Math.floor(this.next() * (max - min + 1));
   };
 
   RNG.prototype.float = function (min, max) {
+    finiteNumber(min, 'minimum'); finiteNumber(max, 'maximum');
+    if (max < min || !Number.isFinite(max - min)) throw new RangeError('invalid float range');
     return min + this.next() * (max - min);
   };
 
   RNG.prototype.chance = function (p) {
+    finiteNumber(p, 'probability');
+    if (p < 0 || p > 1) throw new RangeError('probability must be between 0 and 1');
     return this.next() < p;
   };
 
   RNG.prototype.pick = function (arr) {
+    if (!Array.isArray(arr) || !arr.length) throw new RangeError('pick needs a nonempty array');
     return arr[this.int(0, arr.length - 1)];
   };
 
@@ -93,8 +132,10 @@
   }
 
   function base64Decode(str) {
+    if (typeof str !== 'string') throw new TypeError('base64 must be text');
     let out = '';
-    const clean = String(str).replace(/[^A-Za-z0-9+/=]/g, '');
+    const clean = str.replace(/[\t\r\n ]/g, '');
+    if (!/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(clean)) throw new Error('bad base64');
     let i = 0;
     while (i < clean.length) {
       const e1 = B64REV[clean[i++]];
@@ -119,12 +160,7 @@
   }
 
   function fnv1a(str) {
-    let h = 0x811c9dc5;
-    for (let i = 0; i < str.length; i += 1) {
-      h ^= str.charCodeAt(i) & 0xff;
-      h = Math.imul(h, 0x01000193) >>> 0;
-    }
-    return (h >>> 0).toString(16).padStart(8, '0');
+    return hashSeed(str).toString(16).padStart(8, '0');
   }
 
   /* ------------------------------------------------------------------ */
@@ -136,6 +172,8 @@
   // Accepts either an 8-bit binary string (for example "00111100") or a
   // one or two digit hex byte (for example "3c"). Both describe one row.
   function parseRow(token) {
+    if (typeof token === 'number') return boundedInteger(token, 0, 255, 'sprite byte');
+    if (typeof token !== 'string') throw new TypeError('sprite rows must be hex, binary, or numeric bytes');
     const t = String(token).trim();
     let value;
     if (/^[01]{8}$/.test(t)) {
@@ -161,7 +199,7 @@
     if (rows.length !== SPRITE_SIZE) {
       throw new Error('sprite needs exactly ' + SPRITE_SIZE + ' rows, got ' + rows.length);
     }
-    return rows.map(parseRow);
+    return Array.from(rows, parseRow);
   }
 
   function rowsToPixels(bytes) {
@@ -198,6 +236,7 @@
       }
       let b = 0;
       for (let c = 0; c < SPRITE_SIZE; c += 1) {
+        if (pixels[r][c] !== 0 && pixels[r][c] !== 1 && pixels[r][c] !== false && pixels[r][c] !== true) throw new TypeError('sprite pixels must be binary');
         b = (b << 1) | (pixels[r][c] ? 1 : 0);
       }
       parts.push(b.toString(16).padStart(2, '0'));
@@ -206,6 +245,7 @@
   }
 
   function flipSprite(pixels, axis) {
+    encodeSpriteMask(pixels);
     const out = [];
     for (let r = 0; r < SPRITE_SIZE; r += 1) out.push(pixels[r].slice());
     if (axis === 'x') {
@@ -219,6 +259,7 @@
   }
 
   function rotateSprite(pixels) {
+    encodeSpriteMask(pixels);
     const out = [];
     for (let r = 0; r < SPRITE_SIZE; r += 1) {
       const row = [];
@@ -231,11 +272,29 @@
   }
 
   function countBits(pixels) {
+    encodeSpriteMask(pixels);
     let n = 0;
     for (let r = 0; r < SPRITE_SIZE; r += 1) {
       for (let c = 0; c < SPRITE_SIZE; c += 1) n += pixels[r][c] ? 1 : 0;
     }
     return n;
+  }
+
+  function validateSpriteSheet(sheet) {
+    if (!sheet || typeof sheet !== 'object' || Array.isArray(sheet) || sheet.schema !== 'retrosave/sprite' || sheet.version !== 1) throw new TypeError('unsupported sprite sheet schema or version');
+    if (sheet.width !== 8 || sheet.height !== 8) throw new RangeError('sprite sheet must be 8 by 8');
+    if (typeof sheet.name !== 'string' || !sheet.name.trim() || sheet.name.length > 24 || /[\x00-\x1f\x7f]/.test(sheet.name)) throw new RangeError('sprite name needs 1 to 24 characters without control characters');
+    if (typeof sheet.palette !== 'string' || !/^#[0-9a-f]{6}$/i.test(sheet.palette)) throw new TypeError('sprite palette must be a six-digit hex color');
+    const parsed = parseSpriteMask(sheet.rows);
+    if (typeof sheet.hex !== 'string' || parseSpriteMask(sheet.hex).hex !== parsed.hex) throw new TypeError('sprite rows and hex must agree');
+    return { schema: 'retrosave/sprite', version: 1, name: sheet.name.trim(), width: 8, height: 8, rows: parsed.hex.split('/'), hex: parsed.hex, palette: sheet.palette.toLowerCase() };
+  }
+
+  function exportSpriteSheet(sheet) { return JSON.stringify(validateSpriteSheet(sheet), null, 2); }
+
+  function importSpriteSheet(text) {
+    if (typeof text !== 'string' || text.length > 8192) throw new TypeError('sprite import needs JSON text of at most 8192 characters');
+    return validateSpriteSheet(JSON.parse(text));
   }
 
   /* ------------------------------------------------------------------ */
@@ -276,13 +335,23 @@
     };
   }
 
-  // Move a rectangle one axis at a time; revert that axis on a blocked step.
+  // Sweep one axis at a time and keep the last unblocked position.
   function moveRect(rect, dx, dy, isBlocked) {
+    finiteNumber(rect.x, 'rect x'); finiteNumber(rect.y, 'rect y'); finiteNumber(rect.w, 'rect width'); finiteNumber(rect.h, 'rect height');
+    finiteNumber(dx, 'dx'); finiteNumber(dy, 'dy');
+    if (rect.w <= 0 || rect.h <= 0 || Math.abs(dx) > 1024 || Math.abs(dy) > 1024 || typeof isBlocked !== 'function') throw new RangeError('invalid rectangle movement');
     const out = { x: rect.x, y: rect.y, w: rect.w, h: rect.h };
-    out.x += dx;
-    if (isBlocked(out)) out.x = rect.x;
-    out.y += dy;
-    if (isBlocked(out)) out.y = rect.y;
+    // Sweep each axis in small increments so a large move cannot skip a wall.
+    for (const [axis, distance] of [['x', dx], ['y', dy]]) {
+      if (!distance) continue;
+      const count = Math.ceil(Math.abs(distance) / 0.25);
+      const origin = out[axis];
+      for (let index = 1; index <= count; index++) {
+        const previous = out[axis];
+        out[axis] = origin + distance * index / count;
+        if (isBlocked(out)) { out[axis] = previous; break; }
+      }
+    }
     return out;
   }
 
@@ -320,8 +389,9 @@
   }
 
   function tileAt(level, col, row) {
+    if (!Number.isInteger(col) || !Number.isInteger(row)) return TILE.WALL;
     if (col < 0 || row < 0 || col >= level.width || row >= level.height) return TILE.WALL;
-    return level.tiles[idx(level, col, row)];
+    return level.tiles[idx(level, col, row)] ?? TILE.WALL;
   }
 
   function isWalkable(level, col, row) {
@@ -363,9 +433,12 @@
 
   function generateLevel(seed, levelIndex, options) {
     const opts = options || {};
-    const width = opts.width || 40;
-    const height = opts.height || 24;
-    const roomTarget = opts.rooms || (6 + Math.min(4, levelIndex));
+    seedText(seed);
+    boundedInteger(levelIndex, 0, 11, 'floor index');
+    if (typeof opts !== 'object' || Array.isArray(opts)) throw new TypeError('level options must be an object');
+    const width = boundedInteger(opts.width === undefined ? 40 : opts.width, 8, 128, 'width');
+    const height = boundedInteger(opts.height === undefined ? 24 : opts.height, 8, 128, 'height');
+    const roomTarget = boundedInteger(opts.rooms === undefined ? (6 + Math.min(4, levelIndex)) : opts.rooms, 1, 40, 'rooms');
     const rng = new RNG(hashSeed(seed) ^ Math.imul(levelIndex + 1, 0x9e3779b1));
     const level = {
       seed: String(seed),
@@ -385,8 +458,8 @@
     let attempts = 0;
     while (level.rooms.length < roomTarget && attempts < roomTarget * 20) {
       attempts += 1;
-      const rw = rng.int(5, 9);
-      const rh = rng.int(4, 7);
+      const rw = rng.int(5, Math.min(9, width - 3));
+      const rh = rng.int(4, Math.min(7, height - 3));
       const rx = rng.int(1, width - rw - 2);
       const ry = rng.int(1, height - rh - 2);
       const candidate = { x: rx, y: ry, w: rw, h: rh };
@@ -422,7 +495,11 @@
     }
 
     const first = roomCenter(level.rooms[0]);
-    const last = roomCenter(level.rooms[level.rooms.length - 1]);
+    let last = roomCenter(level.rooms[level.rooms.length - 1]);
+    if (last.x === first.x && last.y === first.y) {
+      const room = level.rooms[0];
+      last = { x: room.x + room.w - 1, y: room.y + room.h - 1 };
+    }
     level.spawn = { x: first.x, y: first.y };
     level.exit = { x: last.x, y: last.y };
     level.tiles[idx(level, first.x, first.y)] = TILE.SPAWN;
@@ -459,7 +536,7 @@
       if (rng.chance(0.55)) {
         const px = rng.int(room.x + 1, room.x + room.w - 2);
         const py = rng.int(room.y + 1, room.y + room.h - 2);
-        level.pickups.push({ x: px, y: py, kind: rng.pick(['HEALTH', 'SCORE', 'TIME']) });
+        level.pickups.push({ x: px, y: py, kind: rng.pick(['HEALTH', 'SCORE', 'BONUS']) });
       }
     }
 
@@ -495,16 +572,45 @@
     return { reachable: count, floors: floors, connected: count === floors };
   }
 
+  function findPath(level, from, to) {
+    const start = from || level.spawn, goal = to || level.exit;
+    if (!isWalkable(level, start.x, start.y) || !isWalkable(level, goal.x, goal.y)) return null;
+    const previous = new Int32Array(level.width * level.height).fill(-1);
+    const startIndex = idx(level, start.x, start.y), goalIndex = idx(level, goal.x, goal.y);
+    const queue = [startIndex]; previous[startIndex] = startIndex;
+    for (let head = 0; head < queue.length; head++) {
+      const current = queue[head];
+      if (current === goalIndex) break;
+      const col = current % level.width, row = Math.floor(current / level.width);
+      for (const [dx, dy] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
+        const x = col + dx, y = row + dy;
+        if (!isWalkable(level, x, y)) continue;
+        const next = idx(level, x, y);
+        if (previous[next] !== -1) continue;
+        previous[next] = current; queue.push(next);
+      }
+    }
+    if (previous[goalIndex] === -1) return null;
+    const result = [];
+    for (let current = goalIndex; ; current = previous[current]) {
+      result.push({ x: current % level.width, y: Math.floor(current / level.width) });
+      if (current === startIndex) break;
+    }
+    return result.reverse();
+  }
+
   /* ------------------------------------------------------------------ */
   /* Replay and score serialization                                       */
   /* ------------------------------------------------------------------ */
 
   // Per-frame input masks compress into [frame, mask] change points.
   function compressFrames(frames) {
+    if (!Array.isArray(frames)) throw new TypeError('frames must be an array');
+    boundedInteger(frames.length, 0, MAX_REPLAY_FRAMES, 'frame count');
     const changes = [];
     let prev = 0;
     for (let f = 0; f < frames.length; f += 1) {
-      const m = frames[f] >>> 0;
+      const m = boundedInteger(frames[f], 0, 127, 'input mask');
       if (m !== prev) {
         changes.push([f, m]);
         prev = m;
@@ -514,6 +620,16 @@
   }
 
   function expandFrames(changes, length) {
+    boundedInteger(length, 0, MAX_REPLAY_FRAMES, 'frame count');
+    if (!Array.isArray(changes) || changes.length > length) throw new TypeError('changes must be an array no longer than the replay');
+    let previous = -1;
+    for (const change of changes) {
+      if (!Array.isArray(change) || change.length !== 2) throw new TypeError('changes must be [frame, mask] pairs');
+      boundedInteger(change[0], 0, Math.max(0, length - 1), 'change frame');
+      boundedInteger(change[1], 0, 127, 'input mask');
+      if (length === 0 || change[0] <= previous) throw new RangeError('change frames must be strictly increasing and inside the replay');
+      previous = change[0];
+    }
     const frames = new Array(length);
     let ci = 0;
     let cur = 0;
@@ -528,18 +644,21 @@
   }
 
   function packRecord(obj, tag) {
-    const json = JSON.stringify(obj);
+    const json = JSON.stringify(obj).replace(/[\u0080-\uffff]/g, char => '\\u' + char.charCodeAt(0).toString(16).padStart(4, '0'));
     const body = base64Encode(json);
-    return tag + '.' + body + '.' + fnv1a(json);
+    const record = tag + '.' + body + '.' + fnv1a(json);
+    if (record.length > MAX_RECORD_CHARS) throw new RangeError('record exceeds 4 MiB');
+    return record;
   }
 
   function unpackRecord(str, tag) {
-    if (typeof str !== 'string') return null;
+    if (typeof str !== 'string' || str.length > MAX_RECORD_CHARS) return null;
     const parts = str.trim().split('.');
-    if (parts.length !== 3 || parts[0] !== tag) return null;
+    if (parts.length !== 3 || parts[0] !== tag || !/^[0-9a-f]{8}$/.test(parts[2])) return null;
     let json;
     try {
       json = base64Decode(parts[1]);
+      if (base64Encode(json) !== parts[1]) return null;
     } catch (e) {
       return null;
     }
@@ -554,47 +673,80 @@
   const REPLAY_TAG = 'RSAVE1';
   const SCORE_TAG = 'RSCORE1';
 
+  function validateReplayMeta(meta) {
+    if (!meta || typeof meta !== 'object' || Array.isArray(meta) || JSON.stringify(meta).length > 4096) throw new TypeError('replay metadata must be an object of at most 4096 characters');
+    if (meta.engineVersion !== undefined && (typeof meta.engineVersion !== 'string' || !meta.engineVersion || meta.engineVersion.length > 32)) throw new TypeError('invalid replay engine version');
+    if (meta.stateDigest !== undefined && (typeof meta.stateDigest !== 'string' || !/^[0-9a-f]{8}$/.test(meta.stateDigest))) throw new TypeError('invalid replay state digest');
+    if (meta.score !== undefined) boundedInteger(meta.score, 0, 0x7fffffff, 'metadata score');
+    if (meta.level !== undefined) boundedInteger(meta.level, 0, 12, 'metadata level');
+    return meta;
+  }
+
+  function validScoreDate(value) {
+    if (value === '') return true;
+    if (typeof value !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(value)) return false;
+    const date = new Date(value + 'T00:00:00Z');
+    return Number.isFinite(date.getTime()) && date.toISOString().slice(0, 10) === value;
+  }
+
   function serializeReplay(replay) {
-    const frames = replay.frames || [];
+    if (!replay || typeof replay !== 'object' || Array.isArray(replay)) throw new TypeError('replay must be an object');
+    const frames = replay.frames === undefined ? [] : replay.frames;
+    seedText(replay.seed);
+    const meta = replay.meta === undefined ? {} : replay.meta;
+    validateReplayMeta(meta);
     const payload = {
       v: 1,
-      seed: String(replay.seed),
+      seed: replay.seed,
       length: frames.length,
-      meta: replay.meta || {},
+      meta: meta,
       changes: compressFrames(frames)
     };
     return packRecord(payload, REPLAY_TAG);
   }
 
   function parseReplay(str) {
-    const payload = unpackRecord(str, REPLAY_TAG);
-    if (!payload || payload.v !== 1) return null;
-    const length = payload.length | 0;
-    if (length < 0 || length > 5e6) return null;
-    return {
-      seed: payload.seed,
-      meta: payload.meta,
-      frames: expandFrames(payload.changes || [], length),
-      length: length
-    };
+    try {
+      const payload = unpackRecord(str, REPLAY_TAG);
+      if (!payload || payload.v !== 1 || Array.isArray(payload)) return null;
+      seedText(payload.seed);
+      const length = boundedInteger(payload.length, 0, MAX_REPLAY_FRAMES, 'frame count');
+      validateReplayMeta(payload.meta);
+      return { seed: payload.seed, meta: payload.meta, frames: expandFrames(payload.changes, length), length: length };
+    } catch (error) { return null; }
   }
 
   function serializeScore(entry) {
+    if (!entry || typeof entry !== 'object' || Array.isArray(entry)) throw new TypeError('score entry must be an object');
+    const score = boundedInteger(entry.score === undefined ? 0 : entry.score, 0, 0x7fffffff, 'score');
+    const level = boundedInteger(entry.level === undefined ? 0 : entry.level, 0, 12, 'level');
+    const timeFrames = boundedInteger(entry.timeFrames === undefined ? 0 : entry.timeFrames, 0, MAX_REPLAY_FRAMES, 'time frames');
+    if (entry.name !== undefined && typeof entry.name !== 'string') throw new TypeError('score name must be text');
+    const name = (entry.name || 'AAA').trim().toUpperCase().slice(0, 3) || 'AAA';
+    if (!/^[A-Z0-9 ]{1,3}$/.test(name)) throw new TypeError('score initials must use letters, numbers, or spaces');
+    const seed = entry.seed === undefined ? '' : entry.seed;
+    const date = entry.date === undefined ? '' : entry.date;
+    if (typeof seed !== 'string' || seed.length > 128 || !validScoreDate(date)) throw new TypeError('invalid score seed or date');
     return packRecord({
       v: 1,
-      name: String(entry.name || 'AAA').slice(0, 3).toUpperCase(),
-      score: entry.score | 0,
-      level: entry.level | 0,
-      timeFrames: entry.timeFrames | 0,
-      seed: String(entry.seed || ''),
-      date: String(entry.date || '')
+      name: name,
+      score: score,
+      level: level,
+      timeFrames: timeFrames,
+      seed: seed,
+      date: date
     }, SCORE_TAG);
   }
 
   function parseScore(str) {
-    const obj = unpackRecord(str, SCORE_TAG);
-    if (!obj || obj.v !== 1) return null;
-    return obj;
+    try {
+      const obj = unpackRecord(str, SCORE_TAG);
+      if (!obj || obj.v !== 1 || Array.isArray(obj)) return null;
+      boundedInteger(obj.score, 0, 0x7fffffff, 'score'); boundedInteger(obj.level, 0, 12, 'level'); boundedInteger(obj.timeFrames, 0, MAX_REPLAY_FRAMES, 'time frames');
+      if (typeof obj.name !== 'string' || !/^[A-Z0-9 ]{1,3}$/.test(obj.name) || typeof obj.seed !== 'string' || obj.seed.length > 128 || typeof obj.date !== 'string') return null;
+      if (!validScoreDate(obj.date)) return null;
+      return { v: 1, name: obj.name, score: obj.score, level: obj.level, timeFrames: obj.timeFrames, seed: obj.seed, date: obj.date };
+    } catch (error) { return null; }
   }
 
   /* ------------------------------------------------------------------ */
@@ -646,6 +798,7 @@
     return {
       seed: String(seed),
       levelIndex: 0,
+      clearedFloors: 0,
       level: level0,
       frame: 0,
       score: 0,
@@ -672,10 +825,12 @@
   }
 
   function tileBlocked(level, rect) {
+    finiteNumber(rect.x, 'rect x'); finiteNumber(rect.y, 'rect y'); finiteNumber(rect.w, 'rect width'); finiteNumber(rect.h, 'rect height');
+    if (rect.w <= 0 || rect.h <= 0) throw new RangeError('rectangle dimensions must be positive');
     const minX = Math.floor(rect.x);
-    const maxX = Math.floor(rect.x + rect.w);
+    const maxX = Math.ceil(rect.x + rect.w) - 1;
     const minY = Math.floor(rect.y);
-    const maxY = Math.floor(rect.y + rect.h);
+    const maxY = Math.ceil(rect.y + rect.h) - 1;
     for (let y = minY; y <= maxY; y += 1) {
       for (let x = minX; x <= maxX; x += 1) {
         if (!isWalkable(level, x, y)) return true;
@@ -686,9 +841,13 @@
 
   function stepSim(sim, mask) {
     if (sim.status !== 'playing') return sim;
+    boundedInteger(mask, 0, 127, 'input mask');
     const input = decodeInput(mask);
     const p = sim.player;
     const level = sim.level;
+    if (p.dashCooldown > 0) p.dashCooldown -= 1;
+    if (p.fireCooldown > 0) p.fireCooldown -= 1;
+    if (p.invuln > 0) p.invuln -= 1;
     let dx = 0;
     let dy = 0;
     const speed = 4.2 * FIXED_DT;
@@ -721,14 +880,10 @@
     p.x = moved.x + moved.w / 2;
     p.y = moved.y + moved.h / 2;
 
-    if (p.dashCooldown > 0) p.dashCooldown -= 1;
-    if (p.fireCooldown > 0) p.fireCooldown -= 1;
-    if (p.invuln > 0) p.invuln -= 1;
-
     if (input.SHOOT && p.fireCooldown <= 0) {
       p.fireCooldown = 12;
-      const fx = p.facing.x || 1;
-      const fy = p.facing.y || 0;
+      const fx = p.facing.x === 0 && p.facing.y === 0 ? 1 : p.facing.x;
+      const fy = p.facing.y;
       sim.bullets.push({
         x: p.x, y: p.y, vx: fx * 8 * FIXED_DT, vy: fy * 8 * FIXED_DT,
         life: 90, from: 'player'
@@ -761,7 +916,7 @@
           break;
         }
       }
-      if (level.boss && !level.boss.dead) {
+      if (!hit && level.boss && !level.boss.dead) {
         const boss = level.boss;
         if (circleHitsRect(bullet.x, bullet.y, 0.18, {
           x: boss.x - 0.4, y: boss.y - 0.4, w: 1.8, h: 1.8
@@ -806,12 +961,17 @@
           break;
         }
       }
+      if (p.invuln <= 0 && level.boss && !level.boss.dead && rectsOverlap(playerRect(p), { x: level.boss.x - 0.4, y: level.boss.y - 0.4, w: 1.8, h: 1.8 })) {
+        p.hp -= 1; p.invuln = 45;
+        sim.events.push({ type: 'hurt', frame: sim.frame });
+      }
     }
     if (p.hp <= 0) {
       sim.lives -= 1;
       sim.events.push({ type: 'death', frame: sim.frame });
       if (sim.lives <= 0) {
         sim.status = 'gameover';
+        sim.frame += 1;
         return sim;
       }
       p.hp = 3;
@@ -827,13 +987,16 @@
         Math.abs(p.x - (level.exit.x + 0.5)) < 0.5 &&
         Math.abs(p.y - (level.exit.y + 0.5)) < 0.5) {
       sim.score += 500 + sim.levelIndex * 100;
-      sim.levelIndex += 1;
-      sim.level = generateLevel(sim.seed, sim.levelIndex);
-      p.x = sim.level.spawn.x + 0.5;
-      p.y = sim.level.spawn.y + 0.5;
-      sim.bullets = [];
-      sim.events.push({ type: 'floor', frame: sim.frame, level: sim.levelIndex });
-      if (sim.levelIndex >= 12) sim.status = 'win';
+      sim.clearedFloors = sim.levelIndex + 1;
+      if (sim.clearedFloors === 12) sim.status = 'win';
+      else {
+        sim.levelIndex += 1;
+        sim.level = generateLevel(sim.seed, sim.levelIndex);
+        p.x = sim.level.spawn.x + 0.5;
+        p.y = sim.level.spawn.y + 0.5;
+        sim.bullets = [];
+        sim.events.push({ type: 'floor', frame: sim.frame, level: sim.levelIndex });
+      }
     }
 
     sim.score += 1; // survival tick
@@ -842,6 +1005,7 @@
   }
 
   function formatTime(frame) {
+    boundedInteger(frame, 0, Math.floor(Number.MAX_SAFE_INTEGER / 1000), 'frame');
     const totalMs = Math.floor(frame * (1000 / 60));
     const mins = Math.floor(totalMs / 60000);
     const secs = Math.floor((totalMs % 60000) / 1000);
@@ -851,11 +1015,43 @@
            String(cs).padStart(2, '0');
   }
 
+  function simulationDigest(sim) {
+    const level = sim.level;
+    // Rendering effects and event queues do not affect future simulation.
+    return fnv1a(JSON.stringify({ seed: sim.seed, frame: sim.frame, levelIndex: sim.levelIndex, clearedFloors: sim.clearedFloors,
+      score: sim.score, lives: sim.lives, status: sim.status, player: sim.player, bullets: sim.bullets,
+      tiles: level.tiles, enemies: level.enemies, pickups: level.pickups, boss: level.boss }));
+  }
+
+  function verifyReplay(record) {
+    const replay = parseReplay(record);
+    if (!replay) return { valid: false, error: 'Invalid checksum or replay schema' };
+    const compatible = replay.meta.engineVersion === undefined || replay.meta.engineVersion === ENGINE_VERSION;
+    if (!compatible) return { valid: true, engineCompatible: false, error: 'Replay uses another engine version' };
+    const sim = makeSim(replay.seed);
+    let consumed = 0;
+    while (consumed < replay.frames.length && sim.status === 'playing') {
+      stepSim(sim, replay.frames[consumed++]); sim.events.length = 0;
+    }
+    const digest = simulationDigest(sim);
+    return {
+      valid: true, engineCompatible: true, engineVersion: ENGINE_VERSION, seed: replay.seed,
+      frames: replay.length, durationSeconds: replay.length / 60, changes: compressFrames(replay.frames).length,
+      executedFrames: consumed, trailingFrames: replay.length - consumed,
+      final: { status: sim.status, score: sim.score, level: sim.levelIndex + 1, clearedFloors: sim.clearedFloors, frame: sim.frame, stateDigest: digest },
+      stateMatches: replay.meta.stateDigest === undefined ? null : replay.meta.stateDigest === digest,
+      scoreMatches: replay.meta.score === undefined ? null : replay.meta.score === sim.score,
+      levelMatches: replay.meta.level === undefined ? null : replay.meta.level === sim.levelIndex + 1
+    };
+  }
+
   /* ------------------------------------------------------------------ */
   /* Core export                                                          */
   /* ------------------------------------------------------------------ */
 
   const Core = {
+    ENGINE_VERSION: ENGINE_VERSION,
+    MAX_REPLAY_FRAMES: MAX_REPLAY_FRAMES,
     hashSeed: hashSeed,
     RNG: RNG,
     base64Encode: base64Encode,
@@ -867,6 +1063,9 @@
     flipSprite: flipSprite,
     rotateSprite: rotateSprite,
     countBits: countBits,
+    validateSpriteSheet: validateSpriteSheet,
+    exportSpriteSheet: exportSpriteSheet,
+    importSpriteSheet: importSpriteSheet,
     rectsOverlap: rectsOverlap,
     rectContainsPoint: rectContainsPoint,
     circlesOverlap: circlesOverlap,
@@ -881,10 +1080,13 @@
     isWalkable: isWalkable,
     generateLevel: generateLevel,
     levelReachable: levelReachable,
+    findPath: findPath,
     compressFrames: compressFrames,
     expandFrames: expandFrames,
     serializeReplay: serializeReplay,
     parseReplay: parseReplay,
+    verifyReplay: verifyReplay,
+    simulationDigest: simulationDigest,
     serializeScore: serializeScore,
     parseScore: parseScore,
     DEFAULT_SPRITES: DEFAULT_SPRITES,
@@ -967,6 +1169,7 @@
     replayFrames: null,     // masks being played back
     replayCursor: 0,
     replayMeta: {},
+    isReplay: false,
     scoreText: '',
     accumulator: 0,
     lastTime: 0,
@@ -988,6 +1191,9 @@
   };
 
   function setMode(m) {
+    if (m === 'play' && Game.sim && (Game.sim.status === 'gameover' || Game.sim.status === 'win')) {
+      m = Game.sim.status;
+    }
     Game.prevMode = Game.mode;
     Game.mode = m;
     document.body.setAttribute('data-mode', m);
@@ -1002,7 +1208,9 @@
       : (Game.mode === 'visualizer' ? 'viz' : Game.mode);
     tabs.forEach(function (tab) {
       tab.classList.toggle('active', tab.dataset.act === activeAct);
+      tab.setAttribute('aria-pressed', String(tab.dataset.act === activeAct));
     });
+    document.querySelectorAll('[data-act="pause"]').forEach(function (button) { button.setAttribute('aria-pressed', String(Game.mode === 'pause')); });
   }
 
   function updatePanels() {
@@ -1035,6 +1243,7 @@
   function flashMessage(text, ms) {
     Game.message = text;
     Game.messageUntil = performance.now() + (ms || 1600);
+    if ($('workbenchStatus')) $('workbenchStatus').textContent = text;
   }
 
   /* ----------------------- input ---------------------------------- */
@@ -1045,11 +1254,28 @@
     ArrowLeft: 'LEFT', KeyA: 'LEFT',
     ArrowRight: 'RIGHT', KeyD: 'RIGHT',
     Space: 'SHOOT', KeyJ: 'SHOOT', KeyZ: 'SHOOT',
-    ShiftLeft: 'DASH', ShiftRight: 'DASH', KeyK: 'DASH', KeyX: 'DASH',
-    Enter: 'START', KeyP: 'START'
+    ShiftLeft: 'DASH', ShiftRight: 'DASH', KeyK: 'DASH', KeyX: 'DASH'
   };
   const keys = {};
   const keyState = {};
+  const touchInputs = new Map();
+
+  document.addEventListener('pointerdown', function (event) {
+    const button = event.target.closest('[data-input]');
+    if (!button || !Object.prototype.hasOwnProperty.call(C.INPUT, button.dataset.input)) return;
+    event.preventDefault();
+    touchInputs.set(event.pointerId, { action: button.dataset.input, button: button });
+    button.setAttribute('aria-pressed', 'true');
+    if (button.setPointerCapture) button.setPointerCapture(event.pointerId);
+  });
+  function releaseTouch(event) {
+    const entry = touchInputs.get(event.pointerId);
+    if (!entry) return;
+    touchInputs.delete(event.pointerId);
+    entry.button.setAttribute('aria-pressed', String(Array.from(touchInputs.values()).some(value => value.button === entry.button)));
+  }
+  window.addEventListener('pointerup', releaseTouch);
+  window.addEventListener('pointercancel', releaseTouch);
 
   function defaultInput() {
     return { UP: false, DOWN: false, LEFT: false, RIGHT: false, SHOOT: false, DASH: false, START: false };
@@ -1063,20 +1289,25 @@
       }
       return;
     }
+    if (e.target && e.target.tagName === 'BUTTON' && (e.code === 'Enter' || e.code === 'Space')) return;
     const action = keymap[e.code];
     if (action) {
       e.preventDefault();
       if (!keys[e.code]) keyState[action] = true;
       keys[e.code] = true;
     }
-    handleGlobalKeys(e);
+    if (!e.repeat) handleGlobalKeys(e);
   });
   window.addEventListener('keyup', function (e) {
     if (keymap[e.code]) { e.preventDefault(); keys[e.code] = false; }
   });
   window.addEventListener('blur', function () {
     Object.keys(keys).forEach(function (k) { keys[k] = false; });
+    if (Game.mode === 'play') setMode('pause');
+    touchInputs.forEach(function (entry) { entry.button.setAttribute('aria-pressed', 'false'); });
+    touchInputs.clear();
   });
+  document.addEventListener('visibilitychange', function () { if (document.hidden && Game.mode === 'play') setMode('pause'); });
 
   function readKeyboard() {
     const s = defaultInput();
@@ -1089,7 +1320,8 @@
   function readGamepad() {
     const s = defaultInput();
     if (!navigator.getGamepads) return s;
-    const pads = navigator.getGamepads();
+    let pads;
+    try { pads = navigator.getGamepads(); } catch (error) { return s; }
     for (let i = 0; i < pads.length; i += 1) {
       const gp = pads[i];
       if (!gp) continue;
@@ -1117,7 +1349,7 @@
     const kb = readKeyboard();
     const gp = readGamepad();
     const out = defaultInput();
-    Object.keys(out).forEach(function (k) { out[k] = kb[k] || gp[k]; });
+    Object.keys(out).forEach(function (k) { out[k] = kb[k] || gp[k] || Array.from(touchInputs.values()).some(entry => entry.action === k); });
     return out;
   }
 
@@ -1130,26 +1362,36 @@
     master: null,
     enabled: false,
     ensure: function () {
-      if (this.ctx) return;
+      if (this.ctx) return true;
       const AC = window.AudioContext || window.webkitAudioContext;
-      if (!AC) return;
-      this.ctx = new AC();
-      this.master = this.ctx.createGain();
+      if (!AC) return false;
+      try { this.ctx = new AC(); this.master = this.ctx.createGain(); }
+      catch (error) { this.ctx = null; this.master = null; return false; }
       this.master.gain.value = 0; // strictly silent
       this.master.connect(this.ctx.destination);
       this.voices = [];
+      return true;
     },
     setEnabled: function (on) {
+      if (on && !this.ensure()) { this.enabled = false; flashMessage('Synth audio is unavailable in this browser.', 2200); return false; }
       this.enabled = on;
       if (on) {
-        this.ensure();
-        if (this.ctx && this.ctx.state === 'suspended') this.ctx.resume();
+        if (this.ctx && this.ctx.state === 'suspended') {
+          const result = this.ctx.resume();
+          if (result && result.catch) result.catch(function () {
+            Synth.enabled = false;
+            Synth.master.gain.setTargetAtTime(0, Synth.ctx.currentTime, 0.01);
+            if (ui.audioBtn) { ui.audioBtn.textContent = 'Synth audio: muted'; ui.audioBtn.setAttribute('aria-pressed', 'false'); ui.audioBtn.classList.remove('on'); }
+            flashMessage('Audio could not resume. Try the audio control again.', 2200);
+          });
+        }
         if (this.master) {
           this.master.gain.setTargetAtTime(0.22, this.ctx.currentTime, 0.02);
         }
       } else if (this.master) {
         this.master.gain.setTargetAtTime(0, this.ctx.currentTime, 0.01);
       }
+      return true;
     },
     blip: function (freq, dur, type, vol) {
       if (!this.enabled || !this.ctx || !this.master) return;
@@ -1185,10 +1427,11 @@
 
   if (ui.audioBtn) {
     ui.audioBtn.addEventListener('click', function () {
-      Synth.setEnabled(!Synth.enabled);
-      ui.audioBtn.textContent = Synth.enabled ? 'PSG AUDIO: ON' : 'PSG AUDIO: MUTED';
+      const available = Synth.setEnabled(!Synth.enabled);
+      ui.audioBtn.textContent = Synth.enabled ? 'Synth audio: on' : 'Synth audio: muted';
       ui.audioBtn.classList.toggle('on', Synth.enabled);
-      flashMessage(Synth.enabled ? 'PSG SYNTH ENABLED' : 'PSG AUDIO MUTED', 1200);
+      ui.audioBtn.setAttribute('aria-pressed', String(Synth.enabled));
+      if (available) flashMessage(Synth.enabled ? 'Synth audio enabled' : 'Synth audio muted', 1200);
     });
   }
 
@@ -1197,7 +1440,7 @@
       const cur = document.documentElement.getAttribute('data-sheet') || 'parchment';
       const next = cur === 'parchment' ? 'charcoal' : 'parchment';
       document.documentElement.setAttribute('data-sheet', next);
-      ui.sheetToggle.textContent = 'SHEET: ' + next.toUpperCase();
+      ui.sheetToggle.textContent = next === 'parchment' ? 'Theme: parchment' : 'Theme: charcoal';
     });
   }
 
@@ -1269,25 +1512,36 @@
   /* ----------------------- run lifecycle -------------------------- */
 
   function startGame(seed, replayFrames) {
-    Game.seed = String(seed || Game.seed || 'RETROSAVE-1986').trim().toUpperCase() || 'RETROSAVE-1986';
+    const nextSeed = seed === undefined ? Game.seed : seed;
+    let nextSim, frames;
+    try {
+      nextSim = C.makeSim(nextSeed);
+      frames = replayFrames === undefined || replayFrames === null ? null : replayFrames.slice();
+      if (frames) C.compressFrames(frames);
+    } catch (error) { flashMessage('Seed or replay rejected: ' + error.message, 2400); return false; }
+    Game.seed = nextSeed;
     if (ui.seedInput) ui.seedInput.value = Game.seed;
-    Game.sim = C.makeSim(Game.seed);
+    Game.sim = nextSim;
     Game.frames = [];
     Game.deltaCount = 0;
     Game.lastMask = 0;
     Game.cachedLevelIdx = -1;
     Game.cachedReach = null;
-    Game.replayFrames = replayFrames || null;
+    Game.replayFrames = frames;
+    Game.isReplay = frames !== null;
+    Game.replayMeta = {};
     Game.replayCursor = 0;
     Game.particles = [];
     Game.flash = 0;
     Game.shake = 0;
     Game.accumulator = 0;
+    Game.lastTime = 0;
     Game.vizPhase = 0;
     Game.finalScore = null;
     setMode('play');
     updateTelemetry();
-    flashMessage(Game.replayFrames ? 'REPLAY VERIFIED // PLAYBACK' : 'SEED ' + Game.seed + ' // FLOOR 1', 1100);
+    flashMessage(Game.isReplay ? 'Replay input validated. Playback started.' : 'Seed ' + Game.seed + ' | Floor 1', 1600);
+    return true;
   }
 
   function finishRun() {
@@ -1300,14 +1554,17 @@
       seed: Game.seed,
       date: new Date().toISOString().slice(0, 10)
     };
-    saveScore(Game.finalScore);
+    if (!Game.isReplay) saveScore(Game.finalScore);
     setMode(sim.status === 'win' ? 'win' : 'gameover');
+    if (Game.isReplay) completeReplay();
   }
 
   function fixedStep(mask) {
     const sim = Game.sim;
     if (!sim || sim.status !== 'playing') return;
-    const m = mask >>> 0;
+    if (Game.frames.length >= C.MAX_REPLAY_FRAMES) { setMode('pause'); flashMessage('One hour recording limit reached. Export this replay or start a new run.', 3000); return; }
+    const m = boundedInteger(mask, 0, 127, 'input mask');
+    Game.frames.push(m);
     if (m !== Game.lastMask) {
       Game.deltaCount += 1;
       Game.lastMask = m;
@@ -1325,32 +1582,30 @@
     let mask;
     if (Game.replayFrames) {
       if (Game.replayCursor >= Game.replayFrames.length) {
-        flashMessage('REPLAY COMPLETE', 1400);
-        Game.replayFrames = null;
-        setMode('pause');
+        completeReplay();
         return;
       }
       mask = Game.replayFrames[Game.replayCursor] >>> 0;
       Game.replayCursor += 1;
     } else {
       mask = C.encodeInput(currentInput());
-      Game.frames.push(mask);
     }
     fixedStep(mask);
+    if (Game.replayFrames && Game.replayCursor >= Game.replayFrames.length && Game.sim.status === 'playing') completeReplay();
   }
 
   function stepSingleFrame() {
-    if (!Game.sim || Game.sim.status !== 'playing') {
-      startGame(Game.seed);
-    }
-    if (Game.mode === 'play') {
-      setMode('pause');
-    }
-    const mask = C.encodeInput(currentInput());
-    Game.frames.push(mask);
+    if (!Game.sim || Game.sim.status !== 'playing') { flashMessage('Run finished. Restart to step another frame.', 1800); return; }
+    setMode('pause');
+    let mask;
+    if (Game.replayFrames) {
+      if (Game.replayCursor >= Game.replayFrames.length) { completeReplay(); return; }
+      mask = Game.replayFrames[Game.replayCursor++];
+    } else mask = C.encodeInput(currentInput());
     fixedStep(mask);
+    if (Game.replayFrames && Game.replayCursor >= Game.replayFrames.length && Game.sim.status === 'playing') completeReplay();
     updateTelemetry();
-    flashMessage('STEP FRAME ' + Game.sim.frame, 700);
+    flashMessage('Stepped to frame ' + Game.sim.frame, 700);
   }
 
   /* ----------------------- telemetry & CHR-ROM table -------------- */
@@ -1396,16 +1651,18 @@
       if (ui.telFnv) ui.telFnv.textContent = '0x' + C.fnv1a(sim.seed);
       if (ui.telFloor) ui.telFloor.textContent = String(sim.levelIndex + 1).padStart(2, '0') + ' / 12';
       if (ui.telFloorHash) ui.telFloorHash.textContent = '0x' + floorSeed.toString(16).padStart(8, '0');
-      if (ui.telRooms) ui.telRooms.textContent = lv.rooms.length + ' NON-OVERLAPPING';
-      if (ui.telBfs) ui.telBfs.textContent = Game.cachedReach.reachable + ' / ' + Game.cachedReach.floors + ' TILES';
+      if (ui.telRooms) ui.telRooms.textContent = lv.rooms.length + ' rooms';
+      if (ui.telBfs) ui.telBfs.textContent = Game.cachedReach.reachable + ' / ' + Game.cachedReach.floors + ' tiles';
       if (ui.bfsBadge) {
         ui.bfsBadge.textContent = Game.cachedReach.connected
-          ? 'BFS CONNECTED: 100% (' + Game.cachedReach.reachable + ' TILES)'
-          : 'BFS DISCONNECTED';
+          ? 'Connected: 100% (' + Game.cachedReach.reachable + ' tiles)'
+          : 'Disconnected floor';
       }
       if (ui.telCoords) {
         ui.telCoords.textContent = '(' + lv.spawn.x + ',' + lv.spawn.y + ') -> (' + lv.exit.x + ',' + lv.exit.y + ')';
       }
+      const path = C.findPath(lv);
+      if ($('telPath')) $('telPath').textContent = path ? (path.length - 1) + ' tile moves' : 'No path';
     }
     if (ui.telBoss) {
       ui.telBoss.textContent = lv.boss
@@ -1430,7 +1687,7 @@
         ' (' + m.toString(2).padStart(7, '0') + 'b)';
     }
     if (ui.telDeltas) {
-      ui.telDeltas.textContent = Game.deltaCount + ' CHANGE PTS / ' + Game.frames.length + 'F';
+      ui.telDeltas.textContent = Game.deltaCount + ' changes in ' + Game.frames.length + ' frames';
     }
   }
 
@@ -1442,8 +1699,9 @@
     try {
       const raw = localStorage.getItem(SCORE_KEY);
       if (!raw) return [];
+      if (raw.length > 65536) return [];
       const arr = raw.split('\n').filter(Boolean).map(C.parseScore).filter(Boolean);
-      return arr;
+      return arr.sort(function (a, b) { return b.score - a.score; }).slice(0, 8);
     } catch (e) { return []; }
   }
 
@@ -1463,10 +1721,10 @@
     const all = loadScores();
     Game.scores = all;
     if (!all.length) {
-      ui.scoreList.innerHTML = '<div class="empty">No RSCORE1 records stored in localStorage yet. Complete or finish a run to log a checksummed entry.</div>';
+      ui.scoreList.innerHTML = '<div class="empty">No scores yet. Complete a live run to record a score.</div>';
       return;
     }
-    let html = '<div class="score-head"><span>#</span><span>TAG</span><span>SCORE</span><span>FLR</span><span>TIME</span><span>SEED</span></div>';
+    let html = '<div class="score-head"><span>#</span><span>Name</span><span>Score</span><span>Floor</span><span>Time</span><span>Seed</span></div>';
     all.forEach(function (e, i) {
       html += '<div class="score-row"><span>' + (i + 1) +
         '</span><span>' + esc(e.name) + '</span><span>' + e.score +
@@ -1485,14 +1743,16 @@
   /* ----------------------- replay helpers ------------------------- */
 
   function exportReplay() {
-    const frames = Game.frames.length ? Game.frames : (Game.replayFrames || [0]);
+    const frames = Game.frames;
     const str = C.serializeReplay({
       seed: Game.seed,
       frames: frames,
       meta: {
         score: Game.finalScore ? Game.finalScore.score : (Game.sim ? Game.sim.score : 0),
         level: Game.sim ? Game.sim.levelIndex + 1 : 1,
-        recorded: new Date().toISOString().slice(0, 10)
+        recorded: new Date().toISOString().slice(0, 10),
+        engineVersion: C.ENGINE_VERSION,
+        stateDigest: C.simulationDigest(Game.sim)
       }
     });
     if (ui.replayInput) ui.replayInput.value = str;
@@ -1502,23 +1762,47 @@
   function importReplay() {
     if (!ui.replayInput) return;
     const parsed = C.parseReplay(ui.replayInput.value.trim());
-    if (!parsed) { flashMessage('FNV-1A CHECKSUM OR PAYLOAD INVALID', 1600); return; }
-    Game.seed = parsed.seed;
-    startGame(parsed.seed, parsed.frames);
+    if (!parsed) { $('replayReport').textContent = 'Import rejected: invalid checksum or replay schema.'; flashMessage('Replay rejected', 1600); return; }
+    if (parsed.meta.engineVersion !== undefined && parsed.meta.engineVersion !== C.ENGINE_VERSION) { $('replayReport').textContent = 'Import rejected: replay uses another engine version.'; return; }
+    if (!startGame(parsed.seed, parsed.frames)) return;
     if (parsed.meta) Game.replayMeta = parsed.meta;
+    $('replayReport').textContent = 'Checksum and schema valid. Playing ' + parsed.length + ' frames.';
+  }
+
+  function completeReplay() {
+    Game.replayFrames = null;
+    if (Game.sim.status === 'playing') setMode('pause');
+    const expected = Game.replayMeta.stateDigest;
+    const matches = expected === undefined ? null : expected === C.simulationDigest(Game.sim);
+    $('replayReport').textContent = matches === null ? 'Playback complete. This replay has no reference state digest.' :
+      (matches ? 'Playback complete. Final state matches the reference digest.' : 'Playback complete. Final state does not match the reference digest.');
+    flashMessage(matches === false ? 'Replay state mismatch' : 'Replay playback complete', 2200);
+  }
+
+  function inspectReplay() {
+    const report = C.verifyReplay(ui.replayInput.value);
+    const target = $('replayReport');
+    if (!report.valid || report.engineCompatible === false) { target.textContent = report.error; return; }
+    target.textContent = 'Checksum and schema: valid\nEngine: ' + report.engineVersion + '\nSeed: ' + report.seed +
+      '\nFrames: ' + report.frames + ' (' + report.durationSeconds.toFixed(2) + ' s)\nInput changes: ' + report.changes +
+      '\nExecuted frames: ' + report.executedFrames + '\nTrailing frames: ' + report.trailingFrames +
+      '\nFinal score: ' + report.final.score + '\nFinal floor: ' + report.final.level + '\nState digest: ' + report.final.stateDigest +
+      '\nState matches: ' + (report.stateMatches === null ? 'reference absent' : (report.stateMatches ? 'yes' : 'no')) +
+      '\nScore matches: ' + (report.scoreMatches === null ? 'reference absent' : (report.scoreMatches ? 'yes' : 'no'));
   }
 
   function copyReplay() {
-    const str = exportReplay();
+    const str = ui.replayInput.value.trim() || exportReplay();
+    if (!C.parseReplay(str)) { $('replayReport').textContent = 'Copy rejected: invalid replay.'; return; }
     if (!str) return;
     if (navigator.clipboard && navigator.clipboard.writeText) {
       navigator.clipboard.writeText(str).then(function () {
-        flashMessage('RSAVE1 TOKEN COPIED', 1400);
+        flashMessage('Replay copied', 1400);
       }, function () {
-        flashMessage('TOKEN READY IN REPLAY VERIFIER', 1600);
+        flashMessage('Select the replay text and copy it', 1600);
       });
     } else {
-      flashMessage('TOKEN READY IN REPLAY VERIFIER', 1600);
+      ui.replayInput.focus(); ui.replayInput.select(); flashMessage('Select the replay text and copy it', 1600);
     }
   }
 
@@ -1529,7 +1813,7 @@
     if (code === 'Escape') {
       if (Game.mode === 'play') setMode('pause');
       else if (Game.mode === 'pause') setMode('play');
-      else setMode('play');
+      else if (Game.mode !== 'gameover' && Game.mode !== 'win') setMode('play');
       return;
     }
     if (code === 'Period') {
@@ -1554,13 +1838,15 @@
       startGame(ui.seedInput ? ui.seedInput.value : Game.seed);
     } else if ((code === 'Enter' || code === 'KeyP') && Game.mode === 'pause') {
       setMode('play');
+    } else if ((code === 'Enter' || code === 'KeyP') && Game.mode === 'play') {
+      setMode('pause');
     }
   }
 
   function isTypingTarget(t) {
     if (!t) return false;
     const tag = t.tagName;
-    return tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT';
+    return tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || t.isContentEditable;
   }
 
   function toggleVisualizer() {
@@ -1576,7 +1862,7 @@
     for (let r = 0; r < 8; r += 1) {
       for (let c = 0; c < 8; c += 1) {
         const on = Game.editor.pixels[r][c] ? ' on' : '';
-        html += '<div class="px' + on + '" data-r="' + r + '" data-c="' + c + '"></div>';
+        html += '<button type="button" class="px' + on + '" data-r="' + r + '" data-c="' + c + '" aria-label="Row ' + (r + 1) + ', column ' + (c + 1) + '" aria-pressed="' + !!Game.editor.pixels[r][c] + '"></button>';
       }
     }
     ui.editorGrid.innerHTML = html;
@@ -1592,6 +1878,11 @@
   let editorPaintValue = 1;
 
   if (ui.editorGrid) {
+    ui.editorGrid.addEventListener('click', function (e) {
+      if (e.detail !== undefined && e.detail !== 0) return;
+      const cell = e.target.closest('.px');
+      if (cell) paintCell(+cell.dataset.r, +cell.dataset.c, Game.editor.pixels[+cell.dataset.r][+cell.dataset.c] ? 0 : 1);
+    });
     ui.editorGrid.addEventListener('pointerdown', function (e) {
       const cell = e.target.closest('.px');
       if (!cell) return;
@@ -1608,13 +1899,14 @@
       paintCell(+cell.dataset.r, +cell.dataset.c, editorPaintValue);
     });
     window.addEventListener('pointerup', function () { editorPainting = false; });
+    window.addEventListener('pointercancel', function () { editorPainting = false; });
   }
 
   function paintCell(r, c, val) {
     if (r < 0 || r > 7 || c < 0 || c > 7) return;
     Game.editor.pixels[r][c] = val;
     const cell = ui.editorGrid && ui.editorGrid.querySelector('[data-r="' + r + '"][data-c="' + c + '"]');
-    if (cell) cell.classList.toggle('on', !!val);
+    if (cell) { cell.classList.toggle('on', !!val); cell.setAttribute('aria-pressed', String(!!val)); }
     refreshEditorHex();
     drawEditorPreview();
   }
@@ -1654,6 +1946,7 @@
     const hex = C.encodeSpriteMask(Game.editor.pixels);
     const name = (ui.editorName && ui.editorName.value.trim()) || 'CUSTOM';
     const payload = {
+      schema: 'retrosave/sprite', version: 1,
       name: name,
       width: 8,
       height: 8,
@@ -1661,7 +1954,10 @@
       hex: hex,
       palette: Game.editor.color
     };
-    const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
+    let text;
+    try { text = C.exportSpriteSheet(payload); } catch (error) { flashMessage('Sprite export rejected: ' + error.message, 2200); return; }
+    $('spriteJson').value = text;
+    const blob = new Blob([text], { type: 'application/json' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
@@ -1670,7 +1966,18 @@
     a.click();
     document.body.removeChild(a);
     setTimeout(function () { URL.revokeObjectURL(url); }, 1000);
-    flashMessage('SPRITE JSON EXPORTED', 1200);
+    flashMessage('Sprite JSON exported', 1200);
+  }
+
+  function importSprite() {
+    try {
+      const sheet = C.importSpriteSheet($('spriteJson').value);
+      Game.editor.pixels = C.parseSpriteMask(sheet.rows).pixels;
+      Game.editor.color = sheet.palette;
+      ui.editorName.value = sheet.name;
+      $('editorColor').value = sheet.palette;
+      buildEditorGrid(); flashMessage('Sprite sheet imported', 1200);
+    } catch (error) { flashMessage('Sprite import rejected: ' + error.message, 2200); }
   }
 
   /* ----------------------- visualizer ----------------------------- */
@@ -1714,6 +2021,7 @@
       case 'export-replay': exportReplay(); break;
       case 'copy-replay': copyReplay(); break;
       case 'import-replay': importReplay(); break;
+      case 'inspect-replay': inspectReplay(); break;
       case 'clear-editor':
         Game.editor.pixels = Array.from({ length: 8 }, function () { return new Array(8).fill(0); });
         buildEditorGrid(); drawEditorPreview();
@@ -1736,9 +2044,11 @@
         if (ui.editorHex) editorLoadHex(ui.editorHex.value.trim());
         break;
       case 'export-sprite': exportSprite(); break;
+      case 'import-sprite': importSprite(); break;
       case 'apply-sprite':
         spriteCache.player = Game.editor.pixels.map(function (r) { return r.slice(); });
         spriteCache.playerAlt = Game.editor.pixels.map(function (r) { return r.slice(); });
+        Game.playerColor = Game.editor.color;
         flashMessage('PLAYER CHR-ROM PATCHED', 1200);
         setMode('play');
         break;
@@ -1878,7 +2188,7 @@
     if (p.invuln > 0 && Math.floor(p.invuln / 3) % 2 === 0) return;
     const useAlt = Math.floor(sim.frame / 12) % 2 === 0;
     const spr = useAlt ? 'player' : 'playerAlt';
-    drawSprite(g, spr, p.x * TP - 12, p.y * TP - 12, TP / 8, VIEWPORT_COLORS.player);
+    drawSprite(g, spr, p.x * TP - 12, p.y * TP - 12, TP / 8, Game.playerColor || VIEWPORT_COLORS.player);
     g.fillStyle = VIEWPORT_COLORS.bullet;
     g.fillRect(p.x * TP + p.facing.x * 9 - 1, p.y * TP + p.facing.y * 9 - 1, 3, 3);
   }
@@ -1895,9 +2205,9 @@
 
   function drawHUD(g, sim) {
     g.fillStyle = 'rgba(14,12,9,0.88)';
-    g.fillRect(0, 0, VW, 32);
+    g.fillRect(0, 0, VW, 24);
     g.fillStyle = VIEWPORT_COLORS.wallEdge;
-    g.fillRect(0, 31, VW, 1);
+    g.fillRect(0, 23, VW, 1);
     g.font = 'bold 14px "Courier New", monospace';
     g.textBaseline = 'middle';
     g.fillStyle = VIEWPORT_COLORS.player;
@@ -1940,7 +2250,7 @@
     g.fillText(subtitle, VW / 2, VH / 2 + 18);
     g.font = '12px "Courier New", monospace';
     g.fillStyle = VIEWPORT_COLORS.hudDim;
-    g.fillText('ENTER: RESUME / RESTART   |   PERIOD (.): STEP +1 FRAME', VW / 2, VH / 2 + 48);
+    g.fillText('Enter: resume / restart   |   Period (.): step one frame', VW / 2, VH / 2 + 48);
     g.textAlign = 'left';
   }
 
@@ -1950,6 +2260,7 @@
       drawVisualizerScene(g);
     } else if (Game.sim) {
       g.save();
+      g.translate(0, 24);
       if (Game.shake > 0) {
         g.translate((Math.random() - 0.5) * Game.shake, (Math.random() - 0.5) * Game.shake);
       }
@@ -1959,9 +2270,9 @@
       drawPlayer(g, Game.sim);
       g.restore();
       drawHUD(g, Game.sim);
-      if (Game.mode === 'pause') drawCenterText(g, 'HALTED // FRAME ' + Game.sim.frame, 'Fixed dt = 16.667 ms. Press . to step 1 frame or Enter to resume.', VIEWPORT_COLORS.bullet);
-      if (Game.mode === 'gameover') drawCenterText(g, 'RUN TERMINATED', 'SCORE ' + (Game.finalScore ? Game.finalScore.score : 0) + '  |  CLK ' + C.formatTime(Game.sim.frame), VIEWPORT_COLORS.enemy);
-      if (Game.mode === 'win') drawCenterText(g, 'ALL 12 FLOORS VERIFIED', 'FINAL SCORE ' + (Game.finalScore ? Game.finalScore.score : 0) + '  |  CLK ' + C.formatTime(Game.sim.frame), VIEWPORT_COLORS.pickup);
+      if (Game.mode === 'pause') drawCenterText(g, 'Paused at frame ' + Game.sim.frame, 'Each frame is 1/60 second. Press . to step or Enter to resume.', VIEWPORT_COLORS.bullet);
+      if (Game.mode === 'gameover') drawCenterText(g, 'Run ended', 'Score ' + (Game.finalScore ? Game.finalScore.score : 0) + '  |  Time ' + C.formatTime(Game.sim.frame), VIEWPORT_COLORS.enemy);
+      if (Game.mode === 'win') drawCenterText(g, 'All 12 floors cleared', 'Final score ' + (Game.finalScore ? Game.finalScore.score : 0) + '  |  Time ' + C.formatTime(Game.sim.frame), VIEWPORT_COLORS.pickup);
     } else {
       drawVisualizerScene(g);
     }
@@ -2004,10 +2315,10 @@
     g.textAlign = 'center';
     g.font = 'bold 28px "Courier New", monospace';
     g.fillStyle = VIEWPORT_COLORS.player;
-    g.fillText('PSG 48-BAND SPECTRUM ANALYZER', VW / 2, 80);
+    g.fillText('Procedural signal display', VW / 2, 80);
     g.font = '13px "Courier New", monospace';
     g.fillStyle = VIEWPORT_COLORS.hud;
-    g.fillText('SEED: ' + Game.seed + '  |  PRESS V OR CLICK TAB 01 TO RETURN TO DUNGEON VIEWPORT', VW / 2, 112);
+    g.fillText('Animation is independent of audio. Press V to return to the dungeon.', VW / 2, 112);
     g.textAlign = 'left';
   }
 
@@ -2024,14 +2335,14 @@
     if (!Game.lastTime) Game.lastTime = now;
     let dt = (now - Game.lastTime) / 1000;
     Game.lastTime = now;
-    if (dt > 0.25) dt = 0.25;
+    dt = Math.max(0, Math.min(0.25, dt));
 
     if (Game.mode === 'play' && Game.sim) {
       Game.accumulator += dt;
       let steps = 0;
-      while (Game.accumulator >= C.FIXED_DT && steps < 8) {
+      while (Game.accumulator + 1e-10 >= C.FIXED_DT && steps < 8) {
         playStep();
-        Game.accumulator -= C.FIXED_DT;
+        Game.accumulator = Math.max(0, Game.accumulator - C.FIXED_DT);
         steps += 1;
         if (Game.mode !== 'play') break;
       }
@@ -2054,12 +2365,12 @@
   function updateHudText() {
     if (!ui.hud) return;
     const bits = [];
-    bits.push('DT 16.67MS');
+    bits.push('60 Hz');
     if (Game.sim) {
-      bits.push(Game.replayFrames ? 'VERIFY ' + Game.replayCursor + '/' + Game.replayFrames.length : 'REC ' + Game.frames.length + 'F');
+      bits.push(Game.isReplay ? 'Replay ' + Game.frames.length + ' frames' : 'Recording ' + Game.frames.length + ' frames');
     }
-    bits.push('PSG ' + (Synth.enabled ? 'ON' : 'MUTED'));
-    bits.push('STATE ' + Game.mode.toUpperCase());
+    bits.push('Synth ' + (Synth.enabled ? 'on' : 'muted'));
+    bits.push('Mode ' + Game.mode);
     ui.hud.textContent = bits.join(' | ');
   }
 
@@ -2067,7 +2378,7 @@
 
   const params = new URLSearchParams(location.search);
   const seedParam = params.get('seed');
-  if (seedParam) Game.seed = seedParam.toUpperCase();
+  if (seedParam) { try { seedText(seedParam); Game.seed = seedParam; } catch (error) { /* use the default seed */ } }
   if (ui.seedInput) ui.seedInput.value = Game.seed;
   Game.scores = loadScores();
   buildChrRomTable();
@@ -2084,6 +2395,7 @@
     start: startGame,
     exportReplay: exportReplay,
     importReplay: importReplay,
-    step: fixedStep
+    step: function (mask) { fixedStep(mask); updateTelemetry(); },
+    inspectReplay: inspectReplay
   };
 }(typeof window !== "undefined" ? window : globalThis));

@@ -3,250 +3,181 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<meta name="description" content="RetroSave: 1986 cartridge ROM disassembly, Mulberry32 dungeon generator, and FNV-1a speedrun replay verification workbench.">
+<meta name="description" content="RetroSave is an original seeded dungeon game with replay validation, state diagnostics, and an 8 by 8 sprite editor.">
 <meta name="theme-color" content="#ede6d6">
-<title>RETROSAVE // ROM Disassembly &amp; Speedrun Verification Workbench</title>
+<title>RetroSave | Dungeon and Replay Workbench</title>
 <link rel="stylesheet" href="style.css">
 </head>
 <body data-mode="play">
-
+<a class="skip-link" href="#screen">Skip to the dungeon</a>
 <div class="datasheet">
   <header class="sheet-header">
     <div class="sheet-id">
-      <span class="doc-code">DOC-RS86 // REV 1.2</span>
-      <span class="brand-name">RETROSAVE</span>
-      <span class="brand-sub">DETERMINISTIC DUNGEON ROM &amp; FNV-1A REPLAY VERIFIER</span>
+      <h1 class="brand-name">RetroSave</h1>
+      <p class="brand-sub">Seeded dungeon, replay inspector, and sprite editor</p>
     </div>
     <div class="sheet-actions">
-      <button id="sheetToggle" class="ds-btn" type="button" title="Toggle Parchment Datasheet or Charcoal Bench">SHEET: PARCHMENT</button>
-      <button id="audioBtn" class="ds-btn" type="button" title="Toggle procedural PSG synth (strictly muted on load)">PSG AUDIO: MUTED</button>
-      <a class="ds-link" href="https://github.com/draarivpatel-ui/retrosave" target="_blank" rel="noopener">SOURCE [GITHUB]</a>
+      <button id="sheetToggle" class="ds-btn" type="button">Theme: parchment</button>
+      <button id="audioBtn" class="ds-btn" type="button" aria-pressed="false">Synth audio: muted</button>
+      <a class="ds-link" href="https://github.com/draarivpatel-ui/retrosave" target="_blank" rel="noopener noreferrer">Source on GitHub</a>
     </div>
   </header>
 
-  <!-- Top Control & Seed Bar: Immediate run control without marketing fluff -->
   <div class="control-bar">
     <div class="seed-cluster">
-      <label for="seedInput">ROM SEED</label>
-      <input id="seedInput" type="text" maxlength="32" value="RETROSAVE-1986" spellcheck="false" autocomplete="off">
-      <button class="ds-btn ds-btn-primary" data-act="start" type="button">BOOT SEED [ENTER]</button>
-      <button class="ds-btn" data-act="pause" type="button">PAUSE / STEP [ESC]</button>
+      <label for="seedInput">Seed</label>
+      <input id="seedInput" type="text" maxlength="128" value="RETROSAVE-1986" spellcheck="false" autocomplete="off">
+      <button class="ds-btn ds-btn-primary" data-act="start" type="button">Start seed</button>
+      <button class="ds-btn" data-act="pause" type="button" aria-pressed="false">Pause / resume</button>
     </div>
-    <nav class="tab-bar" aria-label="Workbench instrument panels">
-      <button class="ds-tab active" data-act="title" type="button">01 // TELEMETRY &amp; CHR-ROM</button>
-      <button class="ds-tab" data-act="replay" type="button">02 // REPLAY VERIFIER (RSAVE1)</button>
-      <button class="ds-tab" data-act="editor" type="button">03 // 8x8 CHR-ROM EDITOR [E]</button>
-      <button class="ds-tab" data-act="scores" type="button">04 // RSCORE1 LEDGER</button>
-      <button class="ds-tab" data-act="viz" type="button">05 // PSG SPECTRUM [V]</button>
+    <nav class="tab-bar" aria-label="Workbench panels">
+      <button class="ds-tab active" data-act="title" type="button">Dungeon and telemetry</button>
+      <button class="ds-tab" data-act="replay" type="button">Replay inspector</button>
+      <button class="ds-tab" data-act="editor" type="button">Sprite editor [E]</button>
+      <button class="ds-tab" data-act="scores" type="button">Local scores</button>
+      <button class="ds-tab" data-act="viz" type="button">Signal display [V]</button>
     </nav>
   </div>
+  <p id="workbenchStatus" class="workbench-status" role="status" aria-live="polite"></p>
 
-  <!-- Main Workbench Split: Immediate Playable 960x600 Viewport + Live Tabular Hex Inspector -->
   <main class="workbench-main">
     <div class="viewport-col">
       <div class="viewport-bar">
-        <span>CRT VIEWPORT // 960x600 (40x24 TILES @ 24PX, FIXED DT = 1/60S)</span>
-        <span id="hud" class="hud-line" aria-live="off">FPS 60 | REC 0 | AUDIO MUTED | MODE PLAY</span>
+        <span>960 by 600 canvas; 60 Hz simulation</span>
+        <span id="hud" class="hud-line" aria-live="off">Recording 0 frames; audio muted</span>
       </div>
       <div class="screen-bezel">
-        <canvas id="screen" width="960" height="600" aria-label="RetroSave playable dungeon viewport"></canvas>
+        <canvas id="screen" width="960" height="600" tabindex="0" aria-label="Dungeon. Move with WASD or arrow keys, fire with Space, and dash with Shift.">This game needs a browser with Canvas support.</canvas>
         <div class="screen-glass" aria-hidden="true"></div>
       </div>
       <div class="key-strip">
-        <span><b>MOVE:</b> <kbd>WASD</kbd> / <kbd>ARROWS</kbd></span>
-        <span><b>FIRE:</b> <kbd>SPACE</kbd> / <kbd>J</kbd></span>
-        <span><b>DASH (3.2x):</b> <kbd>SHIFT</kbd> / <kbd>K</kbd></span>
-        <span><b>STEP 1 FRAME (PAUSED):</b> <kbd>.</kbd> or <button class="ds-btn ds-btn-inline" data-act="step-frame" type="button">STEP +1F</button></span>
-        <span><b>EXPORT RUN:</b> <button class="ds-btn ds-btn-inline" data-act="save-run" type="button">COPY RSAVE1</button></span>
+        <span>Move: <kbd>WASD</kbd> / arrows</span>
+        <span>Fire: <kbd>Space</kbd> / <kbd>J</kbd></span>
+        <span>Dash: <kbd>Shift</kbd> / <kbd>K</kbd></span>
+        <span>Pause: <kbd>Esc</kbd> / <kbd>P</kbd></span>
+        <button class="ds-btn ds-btn-inline" data-act="step-frame" type="button">Step one frame [.]</button>
+        <button class="ds-btn ds-btn-inline" data-act="save-run" type="button">Export replay</button>
+      </div>
+      <div class="touch-controls" role="group" aria-label="Touch movement and actions">
+        <button class="ds-btn" data-input="UP" type="button" aria-pressed="false">Up</button>
+        <button class="ds-btn" data-input="LEFT" type="button" aria-pressed="false">Left</button>
+        <button class="ds-btn" data-input="DOWN" type="button" aria-pressed="false">Down</button>
+        <button class="ds-btn" data-input="RIGHT" type="button" aria-pressed="false">Right</button>
+        <button class="ds-btn" data-input="SHOOT" type="button" aria-pressed="false">Fire</button>
+        <button class="ds-btn" data-input="DASH" type="button" aria-pressed="false">Dash</button>
       </div>
     </div>
 
-    <section class="inspector-col">
-      <!-- PANEL 01: LIVE TELEMETRY & CHR-ROM HEX DISASSEMBLY (visible during active play & title) -->
+    <section class="inspector-col" aria-label="Game and data inspectors">
       <div id="panelTitle" class="panel">
         <div class="panel-col full">
-          <div class="sec-head">
-            <h2>SEC 01A // SEED PRNG &amp; FLOOR BFS VERIFICATION</h2>
-            <span class="badge-ok" id="bfsBadge">BFS CONNECTED: 100%</span>
-          </div>
-          <table class="data-table" aria-label="Deterministic level and seed telemetry">
-            <tbody>
-              <tr>
-                <th>SEED STRING</th>
-                <td id="telSeed">RETROSAVE-1986</td>
-                <th>FNV-1A (32-BIT)</th>
-                <td id="telFnv">0x5769c0d1</td>
-              </tr>
-              <tr>
-                <th>FLOOR INDEX</th>
-                <td id="telFloor">01 / 12</td>
-                <th>FLOOR PRNG SEED</th>
-                <td id="telFloorHash">0xc95ebaa2</td>
-              </tr>
-              <tr>
-                <th>CARVED ROOMS</th>
-                <td id="telRooms">6</td>
-                <th>WALKABLE / BFS</th>
-                <td id="telBfs">240 / 240 TILES</td>
-              </tr>
-              <tr>
-                <th>SPAWN / EXIT</th>
-                <td id="telCoords">(4,4) -&gt; (34,18)</td>
-                <th>CHAMBER BOSS</th>
-                <td id="telBoss">NONE (FLOOR 3/6/9/12)</td>
-              </tr>
-            </tbody>
-          </table>
-
-          <div class="sec-head">
-            <h2>SEC 01B // 60 HZ SIMULATION &amp; INPUT DELTA STREAM</h2>
-            <span class="sec-meta">7-BIT INPUT MASK</span>
-          </div>
-          <table class="data-table" aria-label="Live simulation state and input compression">
-            <tbody>
-              <tr>
-                <th>FRAME / CLOCK</th>
-                <td id="telFrame">0000 (00:00.00)</td>
-                <th>PLAYER POS (X,Y)</th>
-                <td id="telPos">(4.50, 4.50)</td>
-              </tr>
-              <tr>
-                <th>HP / LIVES</th>
-                <td id="telHp">3 HP / 3 LIVES</td>
-                <th>SCORE ACCUM</th>
-                <td id="telScore">000000</td>
-              </tr>
-              <tr>
-                <th>INPUT BITMASK</th>
-                <td id="telMask">0x00 (0000000b)</td>
-                <th>DELTA CHANGES</th>
-                <td id="telDeltas">0 EVENTS</td>
-              </tr>
-            </tbody>
-          </table>
-
-          <div class="sec-head">
-            <h2>SEC 01C // CHR-ROM 8x8 SPRITE BITMASK TABLE (CLICK ROW TO EDIT)</h2>
-            <span class="sec-meta">72 BYTES TOTAL</span>
-          </div>
-          <div class="rom-table-wrap">
-            <table class="data-table rom-hex-table" aria-label="CHR-ROM sprite hex dump">
-              <thead>
-                <tr>
-                  <th>ADDR</th>
-                  <th>SYMBOL</th>
-                  <th>8-BYTE ROW HEX MASK (MSB = LEFT PIXEL)</th>
-                  <th>BITS</th>
-                </tr>
-              </thead>
-              <tbody id="chrRomTableBody"></tbody>
-            </table>
-          </div>
+          <div class="sec-head"><h2>Seed and floor connectivity</h2><span class="badge-ok" id="bfsBadge">Checking connectivity</span></div>
+          <table class="data-table" aria-label="Seed and floor telemetry"><tbody>
+            <tr><th scope="row">Seed</th><td id="telSeed">RETROSAVE-1986</td><th scope="row">FNV-1a hash</th><td id="telFnv">Loading</td></tr>
+            <tr><th scope="row">Floor</th><td id="telFloor">1 / 12</td><th scope="row">Floor PRNG seed</th><td id="telFloorHash">Loading</td></tr>
+            <tr><th scope="row">Rooms</th><td id="telRooms">Loading</td><th scope="row">Reachable tiles</th><td id="telBfs">Loading</td></tr>
+            <tr><th scope="row">Spawn / exit</th><td id="telCoords">Loading</td><th scope="row">Boss</th><td id="telBoss">Loading</td></tr>
+            <tr><th scope="row">Shortest exit path</th><td id="telPath" colspan="3">Loading</td></tr>
+          </tbody></table>
+          <div class="sec-head"><h2>Simulation and input stream</h2></div>
+          <table class="data-table" aria-label="Simulation and input telemetry"><tbody>
+            <tr><th scope="row">Frame / clock</th><td id="telFrame">0 (00:00.00)</td><th scope="row">Player position</th><td id="telPos">Loading</td></tr>
+            <tr><th scope="row">HP / lives</th><td id="telHp">3 HP / 3 lives</td><th scope="row">Score</th><td id="telScore">0</td></tr>
+            <tr><th scope="row">Input mask</th><td id="telMask">0x00</td><th scope="row">Input changes</th><td id="telDeltas">0</td></tr>
+          </tbody></table>
+          <div class="sec-head"><h2>Sprite byte table</h2><span class="sec-meta">9 sprites, 72 bytes</span></div>
+          <p class="hint">Choose a sprite row to edit its eight byte masks. Each set bit draws one pixel.</p>
+          <div class="rom-table-wrap"><table class="data-table rom-hex-table" aria-label="Sprite byte masks">
+            <thead><tr><th scope="col">Offset</th><th scope="col">Sprite</th><th scope="col">Row bytes</th><th scope="col">Set bits</th></tr></thead>
+            <tbody id="chrRomTableBody"></tbody>
+          </table></div>
         </div>
       </div>
 
-      <!-- PANEL PAUSE: Single-frame stepping & state inspection -->
       <div id="panelPause" class="panel hidden">
         <div class="panel-col full">
-          <div class="sec-head">
-            <h2>SIMULATION HALTED // FRAME-ACCURATE STEPPER</h2>
-            <span class="sec-meta">DT = 16.667 MS</span>
-          </div>
-          <p class="lede">The fixed-timestep accumulator is paused. Step forward one frame at a time to inspect collision resolution or export the current input stream as an FNV-1a signed replay token.</p>
+          <div class="sec-head"><h2>Paused simulation</h2></div>
+          <p class="lede">Each step consumes one recorded input frame at 1/60 second. During replay, stepping consumes the next replay input.</p>
           <div class="btn-row">
-            <button class="ds-btn ds-btn-primary" data-act="resume" type="button">RESUME 60 HZ [ENTER]</button>
-            <button class="ds-btn" data-act="step-frame" type="button">STEP +1 FRAME [.]</button>
-            <button class="ds-btn" data-act="save-run" type="button">EXPORT RSAVE1 REPLAY</button>
-            <button class="ds-btn" data-act="retry" type="button">RESTART FLOOR 1</button>
+            <button class="ds-btn ds-btn-primary" data-act="resume" type="button">Resume [Enter]</button>
+            <button class="ds-btn" data-act="step-frame" type="button">Step one frame [.]</button>
+            <button class="ds-btn" data-act="save-run" type="button">Export replay</button>
+            <button class="ds-btn" data-act="retry" type="button">Restart floor 1</button>
           </div>
         </div>
       </div>
 
-      <!-- PANEL 02: REPLAY LAB -->
       <div id="panelReplay" class="panel hidden">
         <div class="panel-col full">
-          <div class="sec-head">
-            <h2>SEC 02 // FNV-1A DELTA REPLAY VERIFIER</h2>
-            <span class="sec-meta">FORMAT: RSAVE1.&lt;BASE64&gt;.&lt;FNV1A&gt;</span>
-          </div>
-          <p class="lede">Each replay serializes the seed string, total frame count, and sparse <code>[frame, mask]</code> input transitions into ASCII Base64 signed with a 32-bit FNV-1a checksum. Modifying a single byte invalidates the record.</p>
-          <label class="field-label" for="replayInput">REPLAY RECORD STRING</label>
-          <textarea id="replayInput" rows="5" spellcheck="false" placeholder="RSAVE1.eyJ2IjoxLCJzZWVkIjoiUkVUUk9TQVZFLTE5ODYi..."></textarea>
+          <div class="sec-head"><h2>Replay inspector</h2></div>
+          <p class="lede">An RSAVE1 token contains the exact seed, frame count, and input transitions. Inspect it to resimulate the run and compare its final state with the saved reference.</p>
+          <label class="field-label" for="replayInput">Replay token</label>
+          <textarea id="replayInput" rows="5" spellcheck="false" placeholder="Paste an RSAVE1 token"></textarea>
           <div class="btn-row">
-            <button class="ds-btn ds-btn-primary" data-act="import-replay" type="button">VERIFY &amp; PLAY REPLAY</button>
-            <button class="ds-btn" data-act="export-replay" type="button">LOAD CURRENT RUN TOKEN</button>
-            <button class="ds-btn" data-act="copy-replay" type="button">COPY TO CLIPBOARD</button>
-            <button class="ds-btn" data-act="title" type="button">RETURN TO TELEMETRY</button>
+            <button class="ds-btn ds-btn-primary" data-act="import-replay" type="button">Validate and play</button>
+            <button class="ds-btn" data-act="inspect-replay" type="button">Inspect final state</button>
+            <button class="ds-btn" data-act="export-replay" type="button">Load current run</button>
+            <button class="ds-btn" data-act="copy-replay" type="button">Copy displayed replay</button>
+            <button class="ds-btn" data-act="title" type="button">Return to dungeon</button>
           </div>
-          <p class="hint">Verification check: unpackRecord splits on '.', decodes Base64 payload, computes fnv1a(json), and rejects any mismatch before parsing.</p>
+          <pre id="replayReport" class="replay-report" role="status" aria-live="polite"></pre>
+          <p class="hint">FNV-1a detects damaged data. It is not an authentication signature. Reference digests compare results under the same engine version. Recordings are limited to one hour.</p>
         </div>
       </div>
 
-      <!-- PANEL 03: SPRITE EDITOR -->
       <div id="panelEditor" class="panel hidden">
         <div class="panel-col full">
-          <div class="sec-head">
-            <h2>SEC 03 // 8x8 CHR-ROM BITMASK EDITOR</h2>
-            <span class="sec-meta">DIHEDRAL D4 TRANSFORMS</span>
-          </div>
-          <p class="lede">Toggle bits in the 8x8 matrix or edit the 8-byte slash-delimited hex row string directly. Apply dihedral symmetry transforms (horizontal mirror, vertical mirror, 90-degree CW rotation) and hot-patch the live player sprite.</p>
+          <div class="sec-head"><h2>8 by 8 sprite editor</h2></div>
+          <p class="lede">Paint pixels, edit eight hex rows, or import a validated JSON sheet. Apply the result to the player appearance.</p>
           <div class="editor-layout">
             <div class="editor-matrix-col">
-              <div id="editorGrid" class="editor-grid" aria-label="8x8 sprite bitmask matrix"></div>
-              <div class="editor-preview-wrap">
-                <canvas id="editorPreview" width="128" height="128"></canvas>
-                <span class="mini-label">16x SCALE</span>
-              </div>
+              <div id="editorGrid" class="editor-grid" role="group" aria-label="Sprite pixels"></div>
+              <div class="editor-preview-wrap"><canvas id="editorPreview" width="128" height="128" aria-label="Sprite preview"></canvas></div>
             </div>
             <div class="editor-side">
-              <label class="field-label" for="editorName">SYMBOL IDENTIFIER</label>
+              <label class="field-label" for="editorName">Sprite name</label>
               <input id="editorName" type="text" maxlength="24" value="CUSTOM" spellcheck="false">
-              <label class="field-label" for="editorColor">SWATCH COLOR</label>
+              <label class="field-label" for="editorColor">Color</label>
               <input id="editorColor" type="color" value="#9c2b1b">
-              <label class="field-label" for="editorHex">8-ROW HEX BITMASK (ROW 0..7)</label>
+              <label class="field-label" for="editorHex">Eight row bytes in hex</label>
               <textarea id="editorHex" rows="2" spellcheck="false"></textarea>
               <div class="btn-row wrap">
-                <button class="ds-btn ds-btn-compact" data-act="load-hex" type="button">PARSE HEX</button>
-                <button class="ds-btn ds-btn-compact" data-act="flip-x" type="button">FLIP X</button>
-                <button class="ds-btn ds-btn-compact" data-act="flip-y" type="button">FLIP Y</button>
-                <button class="ds-btn ds-btn-compact" data-act="rotate" type="button">ROTATE 90 CW</button>
-                <button class="ds-btn ds-btn-compact" data-act="clear-editor" type="button">ZERO</button>
-                <button class="ds-btn ds-btn-compact" data-act="fill-editor" type="button">FILL 0xFF</button>
-                <button class="ds-btn ds-btn-compact" data-act="load-default" type="button">RESET DEFAULT</button>
+                <button class="ds-btn ds-btn-compact" data-act="load-hex" type="button">Read hex</button>
+                <button class="ds-btn ds-btn-compact" data-act="flip-x" type="button">Mirror horizontally</button>
+                <button class="ds-btn ds-btn-compact" data-act="flip-y" type="button">Mirror vertically</button>
+                <button class="ds-btn ds-btn-compact" data-act="rotate" type="button">Rotate clockwise</button>
+                <button class="ds-btn ds-btn-compact" data-act="clear-editor" type="button">Clear</button>
+                <button class="ds-btn ds-btn-compact" data-act="fill-editor" type="button">Fill</button>
+                <button class="ds-btn ds-btn-compact" data-act="load-default" type="button">Reset</button>
               </div>
             </div>
           </div>
+          <label class="field-label" for="spriteJson">Sprite sheet JSON</label>
+          <textarea id="spriteJson" rows="4" spellcheck="false" placeholder="Paste a retrosave/sprite sheet"></textarea>
           <div class="btn-row">
-            <button class="ds-btn ds-btn-primary" data-act="apply-sprite" type="button">PATCH PLAYER CHR-ROM</button>
-            <button class="ds-btn" data-act="export-sprite" type="button">EXPORT JSON SHEET</button>
-            <button class="ds-btn" data-act="editor-back" type="button">RETURN TO TELEMETRY</button>
+            <button class="ds-btn ds-btn-primary" data-act="apply-sprite" type="button">Apply sprite</button>
+            <button class="ds-btn" data-act="import-sprite" type="button">Import JSON sheet</button>
+            <button class="ds-btn" data-act="export-sprite" type="button">Download JSON sheet</button>
+            <button class="ds-btn" data-act="editor-back" type="button">Return to dungeon</button>
           </div>
         </div>
       </div>
 
-      <!-- PANEL 04: SCORES -->
       <div id="panelScores" class="panel hidden">
         <div class="panel-col full">
-          <div class="sec-head">
-            <h2>SEC 04 // LOCAL CHECKSUMMED SCORE LEDGER</h2>
-            <span class="sec-meta">FORMAT: RSCORE1.&lt;BASE64&gt;.&lt;FNV1A&gt;</span>
-          </div>
-          <p class="lede">Completed runs are signed with FNV-1a and stored in localStorage. Tampered records fail checksum verification on load.</p>
+          <div class="sec-head"><h2>Local scores</h2></div>
+          <p class="lede">Completed live runs are stored locally as validated RSCORE1 records. Replaying a token does not add a score. Checksums detect corruption and do not prevent deliberate editing.</p>
           <div id="scoreList" class="score-list"></div>
-          <div class="btn-row">
-            <button class="ds-btn" data-act="title" type="button">RETURN TO TELEMETRY</button>
-          </div>
+          <div class="btn-row"><button class="ds-btn" data-act="title" type="button">Return to dungeon</button></div>
         </div>
       </div>
     </section>
   </main>
-
   <footer class="sheet-footer">
-    <span>ISOMORPHIC CORE: <code>RetroSaveCore</code> (<code>game.js</code>) // 49/49 NODE:TEST ASSERTIONS PASSING</span>
-    <span>MULBERRY32 PRNG / FNV-1A 32-BIT HASH / ZERO EXTERNAL DEPENDENCIES</span>
+    <span>Original JavaScript game; no emulator or external assets</span>
+    <span>Mulberry32 seeds; FNV-1a checksums; <code>node --test</code> verification suite</span>
   </footer>
 </div>
-
 <script src="game.js"></script>
 </body>
 </html>

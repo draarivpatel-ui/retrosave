@@ -156,8 +156,8 @@ test('base64Encode matches known reference vectors', () => {
   assert.equal(C.base64Encode('RetroSave'), 'UmV0cm9TYXZl');
 });
 
-test('base64Decode ignores stray non alphabet characters', () => {
-  // Whitespace and punctuation outside the alphabet are stripped before decoding.
+test('base64Decode accepts ASCII whitespace between complete base64 groups', () => {
+  // Whitespace is accepted by the helper; token parsing requires canonical text.
   assert.equal(C.base64Decode(' Z m9v \n'), 'foo');
   assert.equal(C.base64Decode('Z\tg==\n'), 'f');
 });
@@ -301,10 +301,9 @@ test('parseSpriteMask accepts binary strings, mixed separators, and arrays', () 
   // Array input of tokens (hex or binary, mixed) is accepted.
   const arr = ['3c', '7e', '11011011', 'ff', 'ff', 'db', '7e', '3c'];
   assert.equal(C.parseSpriteMask(arr).hex, '3c/7e/db/ff/ff/db/7e/3c');
-  // Numeric tokens are stringified to DECIMAL first. So the number 60 becomes
-  // the token "60", which parses as the hex byte 0x60, not 0x3c. Use strings.
+  // Numeric rows are actual bytes. Decimal 60 is the same byte as hex 3c.
   assert.equal(C.parseSpriteMask([60, 0, 0, 0, 0, 0, 0, 0]).hex,
-    '60/00/00/00/00/00/00/00');
+    '3c/00/00/00/00/00/00/00');
   // A single hex digit is a valid byte (leading zero implied).
   assert.equal(C.parseSpriteMask(['0','0','0','0','0','0','0','f']).bytes[7], 0x0f);
   assert.equal(C.parseSpriteMask(['0','0','0','0','0','0','0','f']).hex,
@@ -329,9 +328,9 @@ test('encodeSpriteMask round trips and validates shape', () => {
   const hex = C.encodeSpriteMask(pixels);
   assert.equal(hex, 'ff/ff/c3/99/99/c3/ff/ff');
   assert.deepEqual(C.parseSpriteMask(hex).pixels, pixels);
-  // Truthy non 1 values are treated as set bits.
+  // Invalid pixel values are rejected instead of coerced into set bits.
   const ones = Array.from({ length: 8 }, () => Array(8).fill(2));
-  assert.equal(C.encodeSpriteMask(ones), 'ff/ff/ff/ff/ff/ff/ff/ff');
+  assert.throws(() => C.encodeSpriteMask(ones), /binary/);
   const zeros = Array.from({ length: 8 }, () => Array(8).fill(0));
   assert.equal(C.encodeSpriteMask(zeros), '00/00/00/00/00/00/00/00');
   assert.throws(() => C.encodeSpriteMask([[1]]), /8 rows/);
@@ -368,12 +367,12 @@ test('rotateSprite rotates 90 degrees and four rotations return to start', () =>
   assert.equal(C.encodeSpriteMask(px), '80/00/00/00/00/00/00/00');
 });
 
-test('countBits counts set pixels regardless of truthy value', () => {
+test('countBits counts binary pixels and rejects other values', () => {
   const px = C.parseSpriteMask('ff/00/ff/00/00/00/00/01').pixels;
   assert.equal(C.countBits(px), 8 + 8 + 1);
   assert.equal(C.countBits(Array.from({ length: 8 }, () => Array(8).fill(0))), 0);
   assert.equal(C.countBits(Array.from({ length: 8 }, () => Array(8).fill(1))), 64);
-  assert.equal(C.countBits(Array.from({ length: 8 }, () => Array(8).fill(7))), 64);
+  assert.throws(() => C.countBits(Array.from({ length: 8 }, () => Array(8).fill(7))), /binary/);
 });
 
 test('every DEFAULT_SPRITES entry parses to a valid 8x8 mask', () => {
@@ -501,7 +500,7 @@ test('generateLevel populates enemies and pickups away from the spawn room', () 
     assert.equal(e.dead, undefined);
   }
   for (const p of lv.pickups) {
-    assert.ok(['HEALTH', 'SCORE', 'TIME'].includes(p.kind));
+    assert.ok(['HEALTH', 'SCORE', 'BONUS'].includes(p.kind));
     assert.ok(C.isWalkable(lv, p.x, p.y));
   }
 });
@@ -584,8 +583,8 @@ test('compressFrames records only input changes and expandFrames rebuilds', () =
   assert.deepEqual(C.expandFrames([], 5), [0, 0, 0, 0, 0]);
   // A change at frame 0 sets the initial mask.
   assert.deepEqual(C.expandFrames([[0, 8]], 4), [8, 8, 8, 8]);
-  // Changes beyond the requested length are ignored.
-  assert.deepEqual(C.expandFrames([[2, 4]], 2), [0, 0]);
+  // Out-of-range changes are rejected so no input transitions disappear.
+  assert.throws(() => C.expandFrames([[2, 4]], 2), RangeError);
 });
 
 test('compress/expand round trip a long randomized per frame stream', () => {

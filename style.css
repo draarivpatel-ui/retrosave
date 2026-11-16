@@ -1,8 +1,4 @@
-/* =========================================================================
-   RETROSAVE // 1986 Cartridge ROM Disassembly & Speedrun Verification Sheet
-   Archival Parchment & Charcoal Lab themes, crisp 1px tabular borders,
-   zero external assets, zero rounded neon-cyan glassmorphic cards.
-   ========================================================================= */
+/* RetroSave workbench styles. Parchment and charcoal themes, local assets. */
 
 :root,
 html[data-sheet="parchment"] {
@@ -56,7 +52,7 @@ body {
   background: var(--bg);
   color: var(--ink);
   font-family: var(--mono);
-  font-size: 12px;
+  font-size: 14px;
   line-height: 1.45;
   font-variant-numeric: tabular-nums;
   -webkit-font-smoothing: antialiased;
@@ -89,26 +85,20 @@ body {
   flex-wrap: wrap;
 }
 
-.doc-code {
-  font-size: 10px;
-  font-weight: 700;
-  padding: 2px 6px;
-  background: var(--rule-strong);
-  color: var(--sheet);
-  letter-spacing: 0.06em;
-}
 
 .brand-name {
+  margin: 0;
   font-size: 19px;
   font-weight: 700;
-  letter-spacing: 0.08em;
+  letter-spacing: 0;
   color: var(--ink);
 }
 
 .brand-sub {
-  font-size: 11px;
+  margin: 0;
+  font-size: 13px;
   color: var(--ink-dim);
-  letter-spacing: 0.03em;
+  letter-spacing: 0;
 }
 
 .sheet-actions {
@@ -124,9 +114,9 @@ body {
   appearance: none;
   cursor: pointer;
   font-family: var(--mono);
-  font-size: 11px;
+  font-size: 13px;
   font-weight: 600;
-  letter-spacing: 0.04em;
+  letter-spacing: 0;
   color: var(--ink);
   background: var(--sheet);
   border: 1px solid var(--rule-strong);
@@ -206,7 +196,6 @@ body {
   background: var(--sheet);
   border: 1px solid var(--rule-strong);
   padding: 4px 8px;
-  text-transform: uppercase;
   outline: none;
 }
 
@@ -362,9 +351,9 @@ kbd {
 
 .sec-head h2 {
   margin: 0;
-  font-size: 11px;
+  font-size: 14px;
   font-weight: 700;
-  letter-spacing: 0.06em;
+  letter-spacing: 0;
   color: var(--accent);
 }
 
@@ -400,11 +389,11 @@ kbd {
 }
 
 .data-table th {
-  font-size: 9.5px;
+  font-size: 11px;
   font-weight: 700;
   color: var(--ink-dim);
   background: var(--sheet-alt);
-  white-space: nowrap;
+  white-space: normal;
 }
 
 .data-table td {
@@ -553,8 +542,8 @@ input[type="color"] {
 
 .editor-grid {
   display: grid;
-  grid-template-columns: repeat(8, 22px);
-  grid-template-rows: repeat(8, 22px);
+  grid-template-columns: repeat(8, 30px);
+  grid-template-rows: repeat(8, 30px);
   gap: 1px;
   padding: 4px;
   background: var(--rule-strong);
@@ -563,9 +552,23 @@ input[type="color"] {
 }
 
 .editor-grid .px {
+  appearance: none;
+  border: 0;
+  padding: 0;
   background: var(--sheet);
   cursor: crosshair;
 }
+
+:where(button, input, textarea, a, canvas):focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.inspector-col { min-width: 0; }
+.data-table td { overflow-wrap: anywhere; }
+.workbench-status { margin: 0; padding: 8px 14px; color: var(--accent); border-bottom: 1px solid var(--rule); }
+.replay-report { max-height: 340px; overflow: auto; white-space: pre-wrap; font: inherit; }
+.touch-controls { display: flex; flex-wrap: wrap; gap: 6px; padding: 8px 12px; }
+.touch-controls button { min-width: 48px; min-height: 44px; touch-action: none; user-select: none; }
+.touch-controls [aria-pressed="true"] { background: var(--accent); color: var(--accent-ink); }
+.skip-link { position: absolute; left: 14px; top: -60px; padding: 8px; background: var(--sheet); z-index: 10; }
+.skip-link:focus { top: 8px; }
 
 .editor-grid .px.on {
   background: var(--accent);
@@ -585,13 +588,6 @@ input[type="color"] {
   border: 1px solid var(--rule-strong);
 }
 
-.mini-label {
-  position: absolute;
-  bottom: 3px;
-  right: 5px;
-  font-size: 9px;
-  color: #c8bfa8;
-}
 
 .editor-side {
   flex: 1 1 200px;
