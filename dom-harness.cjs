@@ -228,7 +228,6 @@ function createPage(directory, options = {}) {
 
   let now = 1000;
   const animationFrames = [];
-  const timers = [];
   const blobs = new Map();
   const window = new EventTarget();
   const storage = new Map(Object.entries(options.storage || {}));
@@ -249,7 +248,7 @@ function createPage(directory, options = {}) {
     performance: { now: () => now }, Date: FixtureDate, URL: FakeURL, URLSearchParams, Blob, TextEncoder, TextDecoder,
     getComputedStyle: () => ({ getPropertyValue: () => '#333333' }),
     requestAnimationFrame: callback => { animationFrames.push(callback); return animationFrames.length; },
-    setTimeout: callback => { timers.push(callback); return timers.length; }, clearTimeout() {},
+    setTimeout() {},
     console: { log() {}, warn() {}, error(...args) { throw new Error(args.join(' ')); } }
   };
   Object.assign(window, sandbox, { innerWidth: 1280, innerHeight: 800, print() { document.printed = true; }, matchMedia: () => ({ matches: false }) });
@@ -265,8 +264,7 @@ function createPage(directory, options = {}) {
     get(id) { const node = document.getElementById(id); assert.ok(node, 'missing element #' + id); return node; },
     fire(target, type, extra = {}) { target.dispatchEvent({ type, bubbles: true, ...extra }); },
     key(code, type = 'keydown', target = document.body, extra = {}) { window.dispatchEvent({ type, code, target, ...extra }); },
-    flushFrame(deltaMs = 1000 / 60) { now += deltaMs; const batch = animationFrames.splice(0); for (const callback of batch) callback(now); },
-    flushTimers() { const batch = timers.splice(0); for (const callback of batch) callback(); }
+    flushFrame(deltaMs = 1000 / 60) { now += deltaMs; const batch = animationFrames.splice(0); for (const callback of batch) callback(now); }
   };
 }
 
