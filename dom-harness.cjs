@@ -25,9 +25,6 @@ class EventTarget {
     if (!this.listeners.has(type)) this.listeners.set(type, []);
     this.listeners.get(type).push(handler);
   }
-  removeEventListener(type, handler) {
-    this.listeners.set(type, (this.listeners.get(type) || []).filter(item => item !== handler));
-  }
   dispatchEvent(event) {
     if (!event.target) event.target = this;
     if (!event.preventDefault) event.preventDefault = () => { event.defaultPrevented = true; };
@@ -174,13 +171,6 @@ class Element extends EventTarget {
     if (this.disabled) return;
     if (this.tagName === 'A' && this.download) this.ownerDocument.downloads.push({ filename: this.download, href: this.href });
     this.dispatchEvent({ type: 'click', bubbles: true });
-  }
-  getBoundingClientRect() { return { left: 0, top: 0, width: 760, height: 360, right: 760, bottom: 360 }; }
-  cloneNode(deep) {
-    const clone = new Element(this.tagName, this.ownerDocument);
-    for (const [key, value] of this.attributes) clone.setAttribute(key, value);
-    if (deep) clone.innerHTML = this.innerHTML;
-    return clone;
   }
   getContext(kind) {
     assert.equal(kind, '2d');
