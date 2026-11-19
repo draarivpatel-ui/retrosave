@@ -793,7 +793,6 @@
   const FIXED_DT = 1 / 60;
 
   function makeSim(seed, opts) {
-    const options = opts || {};
     const level0 = generateLevel(seed, 0);
     return {
       seed: String(seed),
@@ -2294,7 +2293,6 @@
   function drawVisualizerScene(g) {
     g.fillStyle = VIEWPORT_COLORS.bg;
     g.fillRect(0, 0, VW, VH);
-    const t = Game.vizPhase;
     // Oscilloscope grid
     g.strokeStyle = '#241f18';
     g.lineWidth = 1;
