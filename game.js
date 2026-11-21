@@ -6,7 +6,7 @@
 (function (global) {
   'use strict';
 
-  const ENGINE_VERSION = '2.0.0';
+  const ENGINE_VERSION = '2.1.0';
   const MAX_REPLAY_FRAMES = 216000;
   const MAX_RECORD_CHARS = 4 * 1024 * 1024;
 
@@ -22,6 +22,13 @@
 
   function seedText(value) {
     if (typeof value !== 'string' || !value.trim() || value.length > 128 || /[\x00-\x1f\x7f]/.test(value)) throw new TypeError('seed needs 1 to 128 characters without control characters');
+    return value;
+  }
+
+  // Score records may store an empty seed, but any seed they do store must be
+  // a seed the game would actually accept.
+  function scoreSeed(value) {
+    if (typeof value !== 'string' || value.length > 128 || /[\x00-\x1f\x7f]/.test(value)) throw new TypeError('score seed needs at most 128 characters without control characters');
     return value;
   }
 
@@ -724,9 +731,9 @@
     if (entry.name !== undefined && typeof entry.name !== 'string') throw new TypeError('score name must be text');
     const name = (entry.name || 'AAA').trim().toUpperCase().slice(0, 3) || 'AAA';
     if (!/^[A-Z0-9 ]{1,3}$/.test(name)) throw new TypeError('score initials must use letters, numbers, or spaces');
-    const seed = entry.seed === undefined ? '' : entry.seed;
+    const seed = entry.seed === undefined ? '' : scoreSeed(entry.seed);
     const date = entry.date === undefined ? '' : entry.date;
-    if (typeof seed !== 'string' || seed.length > 128 || !validScoreDate(date)) throw new TypeError('invalid score seed or date');
+    if (!validScoreDate(date)) throw new TypeError('invalid score date');
     return packRecord({
       v: 1,
       name: name,
@@ -743,7 +750,8 @@
       const obj = unpackRecord(str, SCORE_TAG);
       if (!obj || obj.v !== 1 || Array.isArray(obj)) return null;
       boundedInteger(obj.score, 0, 0x7fffffff, 'score'); boundedInteger(obj.level, 0, 12, 'level'); boundedInteger(obj.timeFrames, 0, MAX_REPLAY_FRAMES, 'time frames');
-      if (typeof obj.name !== 'string' || !/^[A-Z0-9 ]{1,3}$/.test(obj.name) || typeof obj.seed !== 'string' || obj.seed.length > 128 || typeof obj.date !== 'string') return null;
+      if (typeof obj.name !== 'string' || !/^[A-Z0-9 ]{1,3}$/.test(obj.name) || typeof obj.date !== 'string') return null;
+      scoreSeed(obj.seed);
       if (!validScoreDate(obj.date)) return null;
       return { v: 1, name: obj.name, score: obj.score, level: obj.level, timeFrames: obj.timeFrames, seed: obj.seed, date: obj.date };
     } catch (error) { return null; }
@@ -2003,6 +2011,14 @@
       case 'start':
         startGame(ui.seedInput ? ui.seedInput.value : Game.seed);
         break;
+      case 'daily': {
+        const now = new Date();
+        const stamp = String(now.getFullYear()) + '-' + String(now.getMonth() + 1).padStart(2, '0') + '-' + String(now.getDate()).padStart(2, '0');
+        const dailySeed = 'RETROSAVE-DAILY-' + stamp;
+        if (ui.seedInput) ui.seedInput.value = dailySeed;
+        startGame(dailySeed);
+        break;
+      }
       case 'resume': setMode('play'); break;
       case 'pause':
         if (Game.mode === 'play') setMode('pause');

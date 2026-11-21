@@ -4,7 +4,7 @@ An original JavaScript dungeon game with seeded floors, replay diagnostics, and 
 
 ## Play and inspect
 
-The page starts on floor 1 with seed RETROSAVE-1986. Seeds are case-sensitive and may contain Unicode. The URL option `?seed=your-seed` loads a seed; invalid values use the default. The game accepts 1 to 128 seed characters without control characters.
+The page starts on floor 1 with seed RETROSAVE-1986. Seeds are case-sensitive and may contain Unicode. The URL option `?seed=your-seed` loads a seed; invalid values use the default. The game accepts 1 to 128 seed characters without control characters. The Daily dungeon button loads RETROSAVE-DAILY-YYYY-MM-DD so every player on a given day clears the same floors and can compare scores directly.
 
 - Clear 12 connected room-and-corridor floors, with bosses on floors 3, 6, 9, and 12.
 - Move on a 60 Hz fixed simulation clock. Swept movement prevents skipping tile walls and permits sliding on a free axis.
@@ -45,7 +45,7 @@ RSAVE1.<base64>.<checksum>
 
 The payload contains version 1, the exact seed, frame count, metadata, and strictly increasing `[frame, mask]` transitions. Inputs use seven bits: UP=1, DOWN=2, LEFT=4, RIGHT=8, SHOOT=16, DASH=32, and reserved START=64.
 
-New exports include engineVersion 2.0.0, score, floor, and a final simulation state digest. Exports contain exactly the consumed input prefix, including zero frames before play. Unicode payload strings are escaped into an ASCII wire document, and seed hashes use UTF-8 FNV-1a.
+New exports include engineVersion 2.1.0, score, floor, and a final simulation state digest. Exports contain exactly the consumed input prefix, including zero frames before play. Unicode payload strings are escaped into an ASCII wire document, and seed hashes use UTF-8 FNV-1a.
 
 The inspector validates the token, resimulates it, and reports consumed/trailing frames, score, floor, and digest comparisons. The state digest includes future-relevant player, floor, enemy, pickup, boss, and bullet state; it excludes event queues and rendering effects.
 
@@ -92,7 +92,7 @@ Run from this repository:
 node --test
 ```
 
-**93 tests pass, with zero failures or skipped tests.** Tests cover FNV-1a references and UTF-8, reproducible Mulberry32 streams, Base64 and token parsing, one-hour boundaries, sprite byte/pixel validation and transforms, JSON sheets, connected bounded dungeons, BFS paths, wall sweeps, shot direction, single-target damage, invulnerability duration, fatal frames, floor 12 victory, score validation, and replay state reproduction.
+**95 tests pass, with zero failures or skipped tests.** Tests cover FNV-1a references and UTF-8, reproducible Mulberry32 streams, Base64 and token parsing, one-hour boundaries, sprite byte/pixel validation and transforms, JSON sheets, connected bounded dungeons, BFS paths, wall sweeps, shot direction, single-target damage, invulnerability duration, fatal frames, floor 12 victory, score validation, and replay state reproduction.
 
 The UI tests execute the actual HTML and game controller with [dom-harness.cjs](dom-harness.cjs). They cover startup, DOM references, Canvas calls with finite coordinates, fixed-step recording, exact seed preservation, pause/typing behavior, replay prefix stepping, inspection without mutation, touch input, sprite downloads/imports, themes, optional audio/gamepad/storage, and score ledger behavior. This harness does not verify browser layout, visual appearance, or real audio/gamepad hardware.
 

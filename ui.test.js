@@ -153,6 +153,17 @@ test('completed live runs enter the ledger and replay playback does not add dupl
   }
 });
 
+test('daily dungeon button loads the dated shared seed and starts a run', () => {
+  const page = createPage(__dirname);
+  action(page, 'daily');
+  const stamp = new page.window.Date();
+  const expected = 'RETROSAVE-DAILY-' + String(stamp.getFullYear()) + '-' + String(stamp.getMonth() + 1).padStart(2, '0') + '-' + String(stamp.getDate()).padStart(2, '0');
+  assert.equal(page.get('seedInput').value, expected);
+  assert.equal(page.window.RetroSave.Game.seed, expected);
+  page.flushFrame();
+  assert.equal(page.window.RetroSave.Game.sim.seed, expected);
+});
+
 test('unavailable gamepad access falls back to keyboard input without uncaught errors', () => {
   const page = createPage(__dirname); page.navigator.getGamepads = () => { throw new Error('unavailable'); };
   page.flushFrame(); page.key('KeyD'); page.flushFrame();

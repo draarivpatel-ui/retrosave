@@ -94,13 +94,6 @@ body {
   color: var(--ink);
 }
 
-.brand-sub {
-  margin: 0;
-  font-size: 13px;
-  color: var(--ink-dim);
-  letter-spacing: 0;
-}
-
 .sheet-actions {
   display: flex;
   align-items: center;

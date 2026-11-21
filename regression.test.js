@@ -221,13 +221,23 @@ test('replay verifier distinguishes absent, mismatched, and incompatible referen
 
 test('score schemas reject checksummed records with invalid numeric or text fields', () => {
   const score = { v: 1, name: 'AAA', score: 10, level: 1, timeFrames: 60, seed: 'S', date: '2026-11-15' };
-  for (const overrides of [{ score: '10' }, { score: -1 }, { level: 13 }, { timeFrames: 1.5 }, { name: '<x>' }, { date: '2026-02-30' }, { seed: null }]) assert.equal(C.parseScore(record({ ...score, ...overrides }, 'RSCORE1')), null);
+  for (const overrides of [{ score: '10' }, { score: -1 }, { level: 13 }, { timeFrames: 1.5 }, { name: '<x>' }, { date: '2026-02-30' }, { seed: null }, { seed: 'ok\nbad' }, { seed: 'a'.repeat(129) }]) assert.equal(C.parseScore(record({ ...score, ...overrides }, 'RSCORE1')), null);
 });
 
 test('score serialization rejects numeric truncation and preserves Unicode seeds', () => {
   for (const overrides of [{ score: -1 }, { score: 2 ** 32 }, { score: 1.5 }, { level: 13 }, { timeFrames: Infinity }, { date: '2026-02-30' }]) assert.throws(() => C.serializeScore(overrides));
   const entry = { name: 'you', score: 120, level: 1, timeFrames: 120, seed: 'Café 水', date: '2026-11-15' };
   assert.equal(C.parseScore(C.serializeScore(entry)).seed, entry.seed);
+  assert.throws(() => C.serializeScore({ ...entry, seed: 'a' }));
+});
+
+test('daily dungeon picks the same dated seed for everyone', () => {
+  const today = new Date();
+  const stamp = String(today.getFullYear()) + '-' + String(today.getMonth() + 1).padStart(2, '0') + '-' + String(today.getDate()).padStart(2, '0');
+  const seed = 'RETROSAVE-DAILY-' + stamp;
+  const a = C.generateLevel(seed, 0);
+  const b = C.generateLevel(seed, 0);
+  assert.deepEqual(a.tiles, b.tiles);
 });
 
 test('RNG bounds and simulation masks reject non-finite and coerced input', () => {
