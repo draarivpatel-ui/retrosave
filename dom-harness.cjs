@@ -25,9 +25,6 @@ class EventTarget {
     if (!this.listeners.has(type)) this.listeners.set(type, []);
     this.listeners.get(type).push(handler);
   }
-  removeEventListener(type, handler) {
-    this.listeners.set(type, (this.listeners.get(type) || []).filter(item => item !== handler));
-  }
   dispatchEvent(event) {
     if (!event.target) event.target = this;
     if (!event.preventDefault) event.preventDefault = () => { event.defaultPrevented = true; };
@@ -175,13 +172,6 @@ class Element extends EventTarget {
     if (this.tagName === 'A' && this.download) this.ownerDocument.downloads.push({ filename: this.download, href: this.href });
     this.dispatchEvent({ type: 'click', bubbles: true });
   }
-  getBoundingClientRect() { return { left: 0, top: 0, width: 760, height: 360, right: 760, bottom: 360 }; }
-  cloneNode(deep) {
-    const clone = new Element(this.tagName, this.ownerDocument);
-    for (const [key, value] of this.attributes) clone.setAttribute(key, value);
-    if (deep) clone.innerHTML = this.innerHTML;
-    return clone;
-  }
   getContext(kind) {
     assert.equal(kind, '2d');
     if (!this.context) {
@@ -238,7 +228,6 @@ function createPage(directory, options = {}) {
 
   let now = 1000;
   const animationFrames = [];
-  const timers = [];
   const blobs = new Map();
   const window = new EventTarget();
   const storage = new Map(Object.entries(options.storage || {}));
@@ -259,7 +248,7 @@ function createPage(directory, options = {}) {
     performance: { now: () => now }, Date: FixtureDate, URL: FakeURL, URLSearchParams, Blob, TextEncoder, TextDecoder,
     getComputedStyle: () => ({ getPropertyValue: () => '#333333' }),
     requestAnimationFrame: callback => { animationFrames.push(callback); return animationFrames.length; },
-    setTimeout: callback => { timers.push(callback); return timers.length; }, clearTimeout() {},
+    setTimeout() {},
     console: { log() {}, warn() {}, error(...args) { throw new Error(args.join(' ')); } }
   };
   Object.assign(window, sandbox, { innerWidth: 1280, innerHeight: 800, print() { document.printed = true; }, matchMedia: () => ({ matches: false }) });
@@ -275,8 +264,7 @@ function createPage(directory, options = {}) {
     get(id) { const node = document.getElementById(id); assert.ok(node, 'missing element #' + id); return node; },
     fire(target, type, extra = {}) { target.dispatchEvent({ type, bubbles: true, ...extra }); },
     key(code, type = 'keydown', target = document.body, extra = {}) { window.dispatchEvent({ type, code, target, ...extra }); },
-    flushFrame(deltaMs = 1000 / 60) { now += deltaMs; const batch = animationFrames.splice(0); for (const callback of batch) callback(now); },
-    flushTimers() { const batch = timers.splice(0); for (const callback of batch) callback(); }
+    flushFrame(deltaMs = 1000 / 60) { now += deltaMs; const batch = animationFrames.splice(0); for (const callback of batch) callback(now); }
   };
 }
 
