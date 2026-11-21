@@ -1523,6 +1523,7 @@
     const nextSeed = seed === undefined ? Game.seed : seed;
     let nextSim, frames;
     try {
+      scoreSeed(nextSeed);
       nextSim = C.makeSim(nextSeed);
       frames = replayFrames === undefined || replayFrames === null ? null : replayFrames.slice();
       if (frames) C.compressFrames(frames);
@@ -2013,7 +2014,7 @@
         break;
       case 'daily': {
         const now = new Date();
-        const stamp = String(now.getFullYear()) + '-' + String(now.getMonth() + 1).padStart(2, '0') + '-' + String(now.getDate()).padStart(2, '0');
+        const stamp = String(now.getUTCFullYear()) + '-' + String(now.getUTCMonth() + 1).padStart(2, '0') + '-' + String(now.getUTCDate()).padStart(2, '0');
         const dailySeed = 'RETROSAVE-DAILY-' + stamp;
         if (ui.seedInput) ui.seedInput.value = dailySeed;
         startGame(dailySeed);

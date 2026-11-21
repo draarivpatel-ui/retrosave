@@ -92,7 +92,7 @@ Run from this repository:
 node --test
 ```
 
-**95 tests pass, with zero failures or skipped tests.** Tests cover FNV-1a references and UTF-8, reproducible Mulberry32 streams, Base64 and token parsing, one-hour boundaries, sprite byte/pixel validation and transforms, JSON sheets, connected bounded dungeons, BFS paths, wall sweeps, shot direction, single-target damage, invulnerability duration, fatal frames, floor 12 victory, score validation, and replay state reproduction.
+**96 tests pass, with zero failures or skipped tests.** Tests cover FNV-1a references and UTF-8, reproducible Mulberry32 streams, Base64 and token parsing, one-hour boundaries, sprite byte/pixel validation and transforms, JSON sheets, connected bounded dungeons, BFS paths, wall sweeps, shot direction, single-target damage, invulnerability duration, fatal frames, floor 12 victory, score validation, and replay state reproduction.
 
 The UI tests execute the actual HTML and game controller with [dom-harness.cjs](dom-harness.cjs). They cover startup, DOM references, Canvas calls with finite coordinates, fixed-step recording, exact seed preservation, pause/typing behavior, replay prefix stepping, inspection without mutation, touch input, sprite downloads/imports, themes, optional audio/gamepad/storage, and score ledger behavior. This harness does not verify browser layout, visual appearance, or real audio/gamepad hardware.
 

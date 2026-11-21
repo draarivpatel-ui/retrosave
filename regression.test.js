@@ -233,7 +233,7 @@ test('score serialization rejects numeric truncation and preserves Unicode seeds
 
 test('daily dungeon picks the same dated seed for everyone', () => {
   const today = new Date();
-  const stamp = String(today.getFullYear()) + '-' + String(today.getMonth() + 1).padStart(2, '0') + '-' + String(today.getDate()).padStart(2, '0');
+  const stamp = String(today.getUTCFullYear()) + '-' + String(today.getUTCMonth() + 1).padStart(2, '0') + '-' + String(today.getUTCDate()).padStart(2, '0');
   const seed = 'RETROSAVE-DAILY-' + stamp;
   const a = C.generateLevel(seed, 0);
   const b = C.generateLevel(seed, 0);

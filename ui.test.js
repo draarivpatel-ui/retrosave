@@ -157,11 +157,18 @@ test('daily dungeon button loads the dated shared seed and starts a run', () => 
   const page = createPage(__dirname);
   action(page, 'daily');
   const stamp = new page.window.Date();
-  const expected = 'RETROSAVE-DAILY-' + String(stamp.getFullYear()) + '-' + String(stamp.getMonth() + 1).padStart(2, '0') + '-' + String(stamp.getDate()).padStart(2, '0');
+  const expected = 'RETROSAVE-DAILY-' + String(stamp.getUTCFullYear()) + '-' + String(stamp.getUTCMonth() + 1).padStart(2, '0') + '-' + String(stamp.getUTCDate()).padStart(2, '0');
   assert.equal(page.get('seedInput').value, expected);
   assert.equal(page.window.RetroSave.Game.seed, expected);
   page.flushFrame();
   assert.equal(page.window.RetroSave.Game.sim.seed, expected);
+});
+
+test('the public start handle rejects an over-length seed without starting a run', () => {
+  const page = createPage(__dirname);
+  const bad = 'x'.repeat(200);
+  assert.equal(page.window.RetroSave.start(bad), false);
+  assert.equal(page.window.RetroSave.Game.seed === bad, false);
 });
 
 test('unavailable gamepad access falls back to keyboard input without uncaught errors', () => {
